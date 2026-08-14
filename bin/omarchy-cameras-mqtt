@@ -28,9 +28,12 @@ import socket
 import struct
 import subprocess
 import sys
+import time
 
 SERVICE = "omarchy-cameras"
 KEEPALIVE = 30
+# Short enough that the ping check runs well inside the keepalive window.
+POLL_TIMEOUT = 5
 
 CONNECT, CONNACK = 0x10, 0x20
 PUBLISH, SUBSCRIBE, SUBACK = 0x30, 0x82, 0x90
@@ -136,18 +139,36 @@ def handle_publish(payload):
 def run(host, port, prefix, user):
     password = lookup_password(host, user)
     sock = socket.create_connection((host, port), timeout=10)
-    # Longer than the keepalive: a quiet broker still sends PINGRESP, so a
-    # timeout here means the link is genuinely gone.
-    sock.settimeout(KEEPALIVE + 10)
+    # Short, so the loop wakes often enough to keep its own keepalive promise.
+    # The deadline that matters is time since we last *sent* something, which
+    # incoming traffic must not postpone — see the ping below.
+    sock.settimeout(POLL_TIMEOUT)
 
+    # Waiting for the next packet and reading the rest of one already started
+    # are different jobs. A timeout in the first is normal and means "go check
+    # the keepalive"; a timeout in the second is just a split TCP segment and
+    # must be waited out, or the client would drop the link mid-packet.
     def read(count):
         chunks = bytearray()
         while len(chunks) < count:
-            chunk = sock.recv(count - len(chunks))
+            try:
+                chunk = sock.recv(count - len(chunks))
+            except socket.timeout:
+                continue
             if not chunk:
                 raise ConnectionError("broker closed the connection")
             chunks += chunk
         return bytes(chunks)
+
+    def next_packet_type():
+        """First byte of the next packet, or None if nothing arrived."""
+        try:
+            byte = sock.recv(1)
+        except socket.timeout:
+            return None
+        if not byte:
+            raise ConnectionError("broker closed the connection")
+        return byte[0]
 
     try:
         sock.sendall(connect_packet("omarchy-cameras-%d" % os.getpid(), user, password))
@@ -170,13 +191,19 @@ def run(host, port, prefix, user):
 
         emit({"ready": True, "topic": topic})
 
+        # A broker disconnects a client it has not heard from in 1.5 keepalives.
+        # The clock runs from our last *outgoing* packet, so incoming events
+        # must not reset it — timing the ping off socket silence instead is
+        # what made the connection drop after a busy minute.
+        last_sent = time.monotonic()
+
         while True:
-            try:
-                packet_type = read(1)[0]
-            except socket.timeout:
-                # Nothing for a whole keepalive. Prove the link is alive rather
-                # than sitting on a socket the broker has already dropped.
+            if time.monotonic() - last_sent >= KEEPALIVE / 2:
                 sock.sendall(bytes([PINGREQ, 0]))
+                last_sent = time.monotonic()
+
+            packet_type = next_packet_type()
+            if packet_type is None:
                 continue
 
             length = read_remaining_length(read)

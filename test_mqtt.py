@@ -27,6 +27,11 @@ spec.loader.exec_module(mqtt)
 # The one piece of MQTT framing with real edge cases: it is 7 bits per byte,
 # and a payload of 127 vs 128 bytes is the boundary where it grows.
 
+assert mqtt.KEEPALIVE / 2 > mqtt.POLL_TIMEOUT, \
+    "the loop must wake several times per keepalive window to ping on schedule"
+assert mqtt.KEEPALIVE / 2 < mqtt.KEEPALIVE * 1.5, \
+    "brokers drop a client after 1.5 keepalives, so ping well inside that"
+
 assert mqtt.remaining_length(0) == b"\x00"
 assert mqtt.remaining_length(127) == b"\x7f"
 assert mqtt.remaining_length(128) == b"\x80\x01"
