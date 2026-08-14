@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Stream Frigate detections from MQTT, one JSON line per new event.
+
+    omarchy-cameras-mqtt <host> <port> <topic-prefix> [--user avila]
+
+Frigate publishes to `<prefix>/events` the instant it detects something, which
+is several seconds ahead of anything the HTTP API can tell us: /api/events only
+lists detections that have ended, and even the in_progress query is bounded by
+how often we are willing to poll.
+
+Standard library only. MQTT 3.1.1 is a small binary protocol and the plugin
+needs exactly four packet types of it — CONNECT, SUBSCRIBE, PUBLISH and PING —
+so a broker library would be a dependency for about a hundred lines.
+
+Output, line-buffered on stdout, in the shape the QML side already parses for
+HTTP replies:
+
+    {"ready": true}                 once subscribed
+    [{...frigate event object...}]  per new detection
+
+The password is read from the keyring, never passed in argv.
+"""
+
+import argparse
+import json
+import os
+import socket
+import struct
+import subprocess
+import sys
+
+SERVICE = "omarchy-cameras"
+KEEPALIVE = 30
+
+CONNECT, CONNACK = 0x10, 0x20
+PUBLISH, SUBSCRIBE, SUBACK = 0x30, 0x82, 0x90
+PINGREQ, PINGRESP, DISCONNECT = 0xC0, 0xD0, 0xE0
+
+CONNACK_ERRORS = {
+    1: "broker rejected the protocol version",
+    2: "broker rejected the client id",
+    3: "broker unavailable",
+    4: "bad MQTT username or password",
+    5: "MQTT user is not authorized",
+}
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def fail(message):
+    emit({"error": message})
+    return 1
+
+
+# ------------------------------------------------------------ MQTT framing
+
+def remaining_length(value):
+    """MQTT's variable-length integer: 7 bits per byte, high bit continues."""
+    out = bytearray()
+    while True:
+        byte = value % 128
+        value //= 128
+        if value:
+            byte |= 0x80
+        out.append(byte)
+        if not value:
+            return bytes(out)
+
+
+def read_remaining_length(sock_read):
+    value, multiplier = 0, 1
+    for _ in range(4):
+        byte = sock_read(1)
+        if not byte:
+            raise ConnectionError("broker closed the connection")
+        value += (byte[0] & 0x7F) * multiplier
+        if not byte[0] & 0x80:
+            return value
+        multiplier *= 128
+    raise ValueError("malformed remaining length")
+
+
+def string_field(text):
+    data = text.encode()
+    return struct.pack("!H", len(data)) + data
+
+
+def connect_packet(client_id, user, password):
+    flags = 0x02  # clean session
+    payload = string_field(client_id)
+    if user:
+        flags |= 0x80
+        payload += string_field(user)
+        if password:
+            flags |= 0x40
+            payload += string_field(password)
+    body = (string_field("MQTT") + bytes([4, flags])
+            + struct.pack("!H", KEEPALIVE) + payload)
+    return bytes([CONNECT]) + remaining_length(len(body)) + body
+
+
+def subscribe_packet(topic, packet_id=1):
+    body = struct.pack("!H", packet_id) + string_field(topic) + bytes([0])
+    return bytes([SUBSCRIBE]) + remaining_length(len(body)) + body
+
+
+# ------------------------------------------------------------------ client
+
+def lookup_password(host, user):
+    if not user:
+        return ""
+    result = subprocess.run(
+        ["secret-tool", "lookup", "service", SERVICE, "key", "mqtt-%s" % host],
+        capture_output=True, check=False)
+    return result.stdout.decode().strip() if result.returncode == 0 else ""
+
+
+def handle_publish(payload):
+    """One `<prefix>/events` message. Frigate sends type new/update/end; only
+    `new` is a detection we have not reported, and `after` carries the same
+    fields the HTTP API returns, so the QML side can parse it unchanged."""
+    try:
+        message = json.loads(payload.decode("utf-8", "replace"))
+    except ValueError:
+        return
+    if not isinstance(message, dict) or message.get("type") != "new":
+        return
+    event = message.get("after") or message.get("before")
+    if isinstance(event, dict) and event.get("id"):
+        emit([event])
+
+
+def run(host, port, prefix, user):
+    password = lookup_password(host, user)
+    sock = socket.create_connection((host, port), timeout=10)
+    # Longer than the keepalive: a quiet broker still sends PINGRESP, so a
+    # timeout here means the link is genuinely gone.
+    sock.settimeout(KEEPALIVE + 10)
+
+    def read(count):
+        chunks = bytearray()
+        while len(chunks) < count:
+            chunk = sock.recv(count - len(chunks))
+            if not chunk:
+                raise ConnectionError("broker closed the connection")
+            chunks += chunk
+        return bytes(chunks)
+
+    try:
+        sock.sendall(connect_packet("omarchy-cameras-%d" % os.getpid(), user, password))
+
+        packet_type = read(1)[0]
+        length = read_remaining_length(read)
+        body = read(length)
+        if packet_type != CONNACK or len(body) < 2:
+            return fail("broker did not answer with CONNACK")
+        if body[1] != 0:
+            return fail(CONNACK_ERRORS.get(body[1], "broker refused the connection"))
+
+        topic = prefix.rstrip("/") + "/events"
+        sock.sendall(subscribe_packet(topic))
+        packet_type = read(1)[0]
+        body = read(read_remaining_length(read))
+        # 0x80 is the broker's "subscription refused", usually an ACL.
+        if packet_type != SUBACK or (body and body[-1] == 0x80):
+            return fail("broker refused a subscription to " + topic)
+
+        emit({"ready": True, "topic": topic})
+
+        while True:
+            try:
+                packet_type = read(1)[0]
+            except socket.timeout:
+                # Nothing for a whole keepalive. Prove the link is alive rather
+                # than sitting on a socket the broker has already dropped.
+                sock.sendall(bytes([PINGREQ, 0]))
+                continue
+
+            length = read_remaining_length(read)
+            body = read(length) if length else b""
+
+            if packet_type & 0xF0 == PUBLISH:
+                topic_length = struct.unpack("!H", body[:2])[0]
+                # QoS 0 only — we subscribed at 0, so there is no packet id
+                # between the topic and the payload.
+                handle_publish(body[2 + topic_length:])
+            elif packet_type == PINGRESP:
+                continue
+    finally:
+        try:
+            sock.sendall(bytes([DISCONNECT, 0]))
+        except OSError:
+            pass
+        sock.close()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="omarchy-cameras-mqtt")
+    parser.add_argument("host")
+    parser.add_argument("port", type=int)
+    parser.add_argument("prefix")
+    parser.add_argument("--user", default="")
+    args = parser.parse_args(argv)
+
+    try:
+        return run(args.host, args.port, args.prefix, args.user) or 0
+    except (OSError, ConnectionError, ValueError, struct.error) as error:
+        return fail(str(error) or error.__class__.__name__)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

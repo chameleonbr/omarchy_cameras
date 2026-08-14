@@ -39,7 +39,7 @@ To store the password from a script instead:
 
 ```bash
 bin/omarchy-cameras-frigate store-password http://nvr.lan:5000   # reads stdin
-omarchy-shell avila.cameras setFrigate http://nvr.lan:5000 8554 admin
+omarchy-shell avila.cameras setFrigate http://nvr.lan:5000 admin
 ```
 
 `setFrigate` deliberately takes no password — it would end up in shell history
@@ -60,7 +60,7 @@ here, the plugin picks it up on the next refresh.
 
 ### Motion alerts
 
-Off by default. Once armed, the plugin polls Frigate's events every 5s and pops
+Off by default. Once armed, the plugin watches Frigate for detections and pops
 a small preview of whichever camera tripped — sized, timed, and placed where
 you tell it, on the monitor you tell it. Clicking the preview opens that camera
 full size; otherwise it disappears on its own.
@@ -88,11 +88,25 @@ without waiting for something to walk past a camera. **Show me** replays it.
 Alerts fire **while the detection is still happening**, not once it is over.
 The poll asks Frigate only for `in_progress=1`; its plain `/api/events` returns
 events that have already ended, which is exactly the delay worth avoiding.
-Measured against a live camera: the preview lands about 10s after the detection
+Measured against a live camera: the preview lands 4-9s after the detection
 starts, while the event is still running.
 
 The trade is that a detection which starts and finishes inside one poll
 interval is never seen, so the poll runs every 3s.
+
+### MQTT
+
+Optional, and strictly a shortcut: Frigate publishes a detection to MQTT the
+instant it makes one, with no poll interval in the way. Switch it on in
+**Config → MQTT**.
+
+Nothing has to be typed but the password. Host, port, topic prefix and username
+all come from Frigate's own `/api/config`, and the password goes to the keyring
+under `key=mqtt-<host>`.
+
+Polling never stops while the broker is not actually connected — a wrong
+password or a broker reboot costs latency, not alerts. The client retries every
+15s in the background. The toggle's subtitle says which path is live.
 
 A running detection is reported on every poll until it ends, so alerts
 deduplicate on the event id. The newest timestamp is still kept in
@@ -139,23 +153,21 @@ omarchy restart shell
 ## Setup
 
 Click the CCTV icon in the bar and hit **Config** (a fresh install opens
-straight there). The form takes the Frigate URL, and finds ONVIF cameras on the
-local network with **Detect cameras** — fill in the camera credentials first,
-then **Add** each one you want. Everything it writes lands in
-`~/.config/omarchy/cameras.json`; ONVIF passwords go to the keyring instead,
-under `service=omarchy-cameras`.
+straight there). The Frigate URL is the only required field — everything else,
+including the login, the motion alerts and MQTT, is optional and sits below it.
+Settings land in `~/.config/omarchy/cameras.json`; every password goes to the
+keyring instead, under `service=omarchy-cameras`.
 
 The same writes are available from a script:
 
 ```bash
-omarchy-shell avila.cameras setFrigate http://nvr.lan:5000 8554
-omarchy-shell avila.cameras discover
+omarchy-shell avila.cameras setFrigate http://nvr.lan:5000
+omarchy-shell avila.cameras mqtt on
 ```
 
 ## Configuration
 
-`~/.config/omarchy/cameras.json` holds everything camera-related. It is also
-where ONVIF discovery writes its results.
+`~/.config/omarchy/cameras.json` holds everything camera-related.
 
 ```json
 {
@@ -181,11 +193,12 @@ where ONVIF discovery writes its results.
   `/api/config`; disabled ones are skipped.
 - `frigate.user` — set only when Frigate requires a login; the password lives
   in the keyring. See "If Frigate requires a login" above.
-- `frigate.rtspPort` — the go2rtc restream port. The fullscreen view plays
-  `rtsp://<frigate-host>:<rtspPort>/<camera>`, not the camera directly, so
-  Frigate's connection to the camera is the only one.
-- `onvif[]` — written by `omarchy-cameras-onvif discover`. Hand-editing is
-  fine: `{"name": …, "rtsp": …, "ptz": true|false, "xaddr": …}`.
+- `frigate.rtspPort` — fallback only, and not a setting in the UI. The real
+  port is read back out of Frigate's own camera inputs: a restreamed camera
+  pulls from `rtsp://127.0.0.1:<port>/<name>`, so the number is already in
+  `/api/config`.
+- `onvif[]` — ONVIF support is built but not surfaced while the Frigate side is
+  being finished. The scripts and IPC verbs still work; see Development.
 - `alerts` — see Motion alerts above. `monitor` is a connector name as the
   compositor reports it (`DP-1`, `HDMI-A-1`); empty means the first screen.
   `labels` falls back to `notifyLabels` when it is absent or empty.
@@ -213,7 +226,7 @@ Over IPC, for keybinds:
 omarchy-shell shell toggle avila.cameras '{}'   # grid, on the focused monitor
 omarchy-shell avila.cameras view garagem        # straight to one camera
 omarchy-shell avila.cameras alerts on           # or off; "" just reports
-omarchy-shell avila.cameras discovery           # ONVIF scan state
+omarchy-shell avila.cameras mqtt on             # or off; "" reports broker state
 omarchy-shell avila.cameras showPlacement       # rehearse the alert position
 omarchy-shell avila.cameras status
 ```
@@ -264,5 +277,6 @@ quickshell log -p $OMARCHY_PATH/shell -t 200 | grep -i avila
 | `AlertCard.qml` | one preview card, also used for the placement rehearsal |
 | `Cameras.js` | source merging, stream selection, event filtering, URL building — pure functions, no QML |
 | `bin/omarchy-cameras-frigate` | authenticated Frigate access: login, one-shot fetch, and the thumbnail mirror |
+| `bin/omarchy-cameras-mqtt` | stdlib MQTT 3.1.1 subscriber; one JSON line per detection |
 | `bin/omarchy-cameras-onvif` | WS-Discovery, stream lookup, keyring — stdlib Python |
 | `bin/omarchy-cameras-view` | the mpv launcher |

@@ -42,6 +42,7 @@ Item {
   readonly property string viewScript: scriptPath("bin/omarchy-cameras-view")
   readonly property string onvifScript: scriptPath("bin/omarchy-cameras-onvif")
   readonly property string frigateScript: scriptPath("bin/omarchy-cameras-frigate")
+  readonly property string mqttScript: scriptPath("bin/omarchy-cameras-mqtt")
 
   // With a username set, every Frigate request goes through the helper, which
   // logs in and carries the JWT cookie. Without one, plain curl is enough and
@@ -86,6 +87,9 @@ Item {
       ? Cameras.mergeCameras(
           Cameras.frigateCameras(frigateStdout.text, config.frigate, runtimeDir), onvif)
       : onvif
+    // Frigate reports its own broker settings, so nothing about MQTT has to be
+    // configured twice.
+    mqttInfo = Cameras.frigateMqtt(frigateStdout.text)
   }
 
   // ------------------------------------------------------- thumbnail mirror
@@ -126,11 +130,15 @@ Item {
     config = Cameras.parseConfig(JSON.stringify(next))
   }
 
-  function setFrigate(url, port, user, password) {
+  // No port argument: the restream port is read back out of Frigate's own
+  // camera inputs (see Cameras.restreamPort), so it is not a setting.
+  function setFrigate(url, user, password) {
     var trimmedUrl = String(url || "").trim()
     var trimmedUser = String(user || "").trim()
     saveConfig({
-      frigate: { url: trimmedUrl, rtspPort: port, user: trimmedUser }
+      frigate: {
+        url: trimmedUrl, rtspPort: config.frigate.rtspPort, user: trimmedUser
+      }
     })
     // Blank password means "keep whatever is already in the keyring", so
     // re-saving the URL does not wipe a working login.
@@ -238,6 +246,55 @@ Item {
   // The first reply only records what Frigate already knows. A shell restart,
   // or arming alerts after they have been off, must not replay the backlog.
   property bool eventsSynced: false
+
+  // ---------------------------------------------------------------- mqtt
+  //
+  // Frigate publishes a detection the instant it makes it, which is several
+  // seconds ahead of any poll. Opt-in, and never the only path: polling keeps
+  // running whenever the broker is not actually connected, so a wrong password
+  // or a broker reboot degrades to slower alerts rather than none.
+
+  property var mqttInfo: Cameras.frigateMqtt("")
+  property bool mqttConnected: false
+  property string mqttError: ""
+  readonly property bool mqttRunning: mqttProcess.running
+
+  readonly property bool mqttWanted: config.alerts.enabled && config.alerts.useMqtt
+    && mqttInfo.enabled && mqttInfo.host !== ""
+
+  function setMqttEnabled(enabled) {
+    saveAlerts({ useMqtt: enabled === true })
+  }
+
+  function storeMqttPassword(password) {
+    if (!password || !mqttInfo.host) return
+    mqttPasswordProcess.secret = String(password)
+    mqttPasswordProcess.command = ["secret-tool", "store",
+      "--label=Omarchy Frigate MQTT " + mqttInfo.host,
+      "service", "omarchy-cameras", "key", "mqtt-" + mqttInfo.host]
+    mqttPasswordProcess.running = true
+    // Reconnect with the new credential rather than waiting out the retry.
+    mqttRestart.restart()
+  }
+
+  function handleMqttLine(line) {
+    var message = null
+    try { message = JSON.parse(String(line || "")) } catch (e) { return }
+
+    if (Array.isArray(message)) {
+      applyEvents(line)
+      return
+    }
+    if (message.ready === true) {
+      mqttConnected = true
+      mqttError = ""
+      // MQTT only ever delivers live detections, so there is no backlog to
+      // absorb — the first message through it is a real alert.
+      eventsSynced = true
+      return
+    }
+    if (message.error) mqttError = String(message.error)
+  }
 
   // Only detections that are still running. Plain /api/events would report the
   // same thing later, once it has ended, which is exactly the delay this is
@@ -468,9 +525,13 @@ Item {
   // 3s rather than 5s: watching only in-progress events means a detection that
   // starts and ends between two polls is never seen at all, and halving the
   // interval costs nothing now that each poll is one request instead of two.
+  //
+  // Keeps running whenever MQTT is not actually connected — including while it
+  // is retrying — so the fast path failing costs latency, never alerts.
   Timer {
     interval: 3000
     running: root.config.alerts.enabled && root.config.frigate.url !== ""
+      && !root.mqttConnected
     repeat: true
     triggeredOnStart: true
     // Arming alerts starts a fresh sync, so whatever happened while they were
@@ -506,6 +567,48 @@ Item {
       id: eventsStdout
       waitForEnd: true
       onStreamFinished: root.applyEvents(eventsStdout.text)
+    }
+  }
+
+  // Long-lived: one JSON line per detection, streamed as they happen.
+  //
+  // `running` is driven by hand rather than bound to mqttWanted. The process
+  // ends on its own — a refused password takes milliseconds — and that write
+  // to `running` breaks any binding on it, so the binding would never restart
+  // it. mqttRetry owns the restarting instead.
+  Process {
+    id: mqttProcess
+    command: [root.mqttScript, root.mqttInfo.host, String(root.mqttInfo.port),
+              root.mqttInfo.prefix, "--user", root.mqttInfo.user]
+    stdout: SplitParser { onRead: function(line) { root.handleMqttLine(line) } }
+    onExited: root.mqttConnected = false
+  }
+
+  // The first attempt happens the moment MQTT is switched on; retries wait.
+  onMqttWantedChanged: if (mqttWanted && !mqttProcess.running) mqttProcess.running = true
+
+  // Runs exactly while MQTT is wanted but not up, so one rule covers a
+  // rejected password and a broker reboot alike. Polling fills the gap, which
+  // is why this can afford to be unhurried.
+  //
+  // No triggeredOnStart: a refused connection dies in 70ms, and firing on
+  // start turned this into a spawn loop — 451 processes in one sitting before
+  // it was caught.
+  Timer {
+    id: mqttRetry
+    interval: 15000
+    repeat: true
+    running: root.mqttWanted && !mqttProcess.running
+    onTriggered: if (root.mqttWanted && !mqttProcess.running) mqttProcess.running = true
+  }
+
+  Process {
+    id: mqttPasswordProcess
+    property string secret: ""
+    stdinEnabled: true
+    onStarted: {
+      write(secret + "\n")
+      secret = ""
     }
   }
 

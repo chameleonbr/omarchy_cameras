@@ -85,7 +85,6 @@ Panel {
     view = "config"
     if (service) {
       urlField.text = service.config.frigate.url
-      portField.text = String(service.config.frigate.rtspPort)
       frigateUserField.text = service.config.frigate.user
       frigatePasswordField.text = ""
       durationField.text = String(service.config.alerts.durationSec)
@@ -176,14 +175,29 @@ Panel {
         + " names=[" + names.join(",") + "]"
         + (root.service.lastError ? " error=\"" + root.service.lastError + "\"" : "")
     }
-    function discover(): string {
-      if (!root.service) return "service unavailable"
-      root.service.discover()
-      return "ok"
-    }
     function showPlacement(): string {
       if (!root.service) return "service unavailable"
       root.service.showPlacement()
+      return "ok"
+    }
+    function mqtt(state: string): string {
+      if (!root.service) return "service unavailable"
+      if (state === "on" || state === "off") root.service.setMqttEnabled(state === "on")
+      var info = root.service.mqttInfo
+      return "wanted=" + root.service.config.alerts.useMqtt
+        + " active=" + root.service.mqttWanted
+        + " procRunning=" + root.service.mqttRunning
+        + " connected=" + root.service.mqttConnected
+        + " broker=\"" + info.host + ":" + info.port + "\""
+        + " frigateMqtt=" + info.enabled
+        + " user=\"" + info.user + "\""
+        + (root.service.mqttError ? " error=\"" + root.service.mqttError + "\"" : "")
+    }
+    // ONVIF discovery is wired up but not surfaced while the Frigate side is
+    // being finished; these keep it reachable for testing.
+    function discover(): string {
+      if (!root.service) return "service unavailable"
+      root.service.discover()
       return "ok"
     }
     function discovery(): string {
@@ -199,9 +213,9 @@ Panel {
     // this process's argv. Store it with
     //   bin/omarchy-cameras-frigate store-password <url>
     // which reads it on stdin, or use the config form.
-    function setFrigate(url: string, rtspPort: string, user: string): string {
+    function setFrigate(url: string, user: string): string {
       if (!root.service) return "service unavailable"
-      root.service.setFrigate(url, parseInt(rtspPort, 10) || 8554, user, "")
+      root.service.setFrigate(url, user, "")
       return "ok"
     }
     function alerts(state: string): string {
@@ -262,10 +276,10 @@ Panel {
       anchors.fill: parent
       // The catcher takes keys before its children, so every text input has to
       // be named here or it silently refuses to accept letters.
-      blocked: urlField.activeFocus || portField.activeFocus
+      blocked: urlField.activeFocus
         || frigateUserField.activeFocus || frigatePasswordField.activeFocus
         || durationField.activeFocus || alertWidthField.activeFocus
-        || userField.activeFocus || passwordField.activeFocus
+        || mqttPasswordField.activeFocus
       onMoveRequested: function(dx, dy) {
         if (root.view === "config") return
         if (!root.cursorActive) { root.cursorActive = true; return }
@@ -423,34 +437,16 @@ Panel {
               onAccepted: saveFrigate.clicked()
             }
 
-            Row {
-              width: parent.width
-              spacing: Style.space(8)
-
-              // A plain field rather than the kit's NumberField: a SpinBox
-              // formats through the locale and renders port 8554 as "8,554".
-              TextField {
-                id: portField
-                width: Style.space(90)
-                placeholderText: "8554"
-                foreground: root.foreground
-                inputMethodHints: Qt.ImhDigitsOnly
-                validator: IntValidator { bottom: 1; top: 65535 }
-                onAccepted: saveFrigate.clicked()
-              }
-
-              Button {
-                id: saveFrigate
-                text: "Save"
-                bordered: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: if (root.service) {
-                  root.service.setFrigate(urlField.text,
-                    parseInt(portField.text, 10) || 8554,
-                    frigateUserField.text, frigatePasswordField.text)
-                  frigatePasswordField.text = ""
-                }
+            Button {
+              id: saveFrigate
+              text: "Save"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: if (root.service) {
+                root.service.setFrigate(urlField.text,
+                  frigateUserField.text, frigatePasswordField.text)
+                frigatePasswordField.text = ""
               }
             }
 
@@ -482,9 +478,8 @@ Panel {
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              text: "Leave the URL blank to run ONVIF-only. Frigate 0.15+ has "
-                + "auth on by default — fill in the login and the password goes "
-                + "to the keyring, never to the config file."
+              text: "Frigate 0.15+ has auth on by default — fill in the login "
+                + "and the password goes to the keyring, never to the config file."
             }
 
             PanelSeparator { foreground: root.foreground }
@@ -590,144 +585,70 @@ Panel {
             PanelSeparator { foreground: root.foreground }
 
             PanelSectionHeader {
-              text: "ONVIF"
+              text: "MQTT"
               foreground: root.foreground
               fontFamily: root.fontFamily
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Alert the instant Frigate detects"
+              description: !root.service ? ""
+                : (!root.service.mqttInfo.enabled
+                    ? "Frigate has MQTT switched off"
+                    : (root.service.mqttConnected
+                        ? "Connected to " + root.service.mqttInfo.host
+                        : "Polling every 3s until the broker answers"))
+              checked: root.service && root.service.config.alerts.useMqtt
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: if (root.service) root.service.setMqttEnabled(!checked)
             }
 
             Row {
               width: parent.width
               spacing: Style.space(8)
+              visible: root.service && root.service.config.alerts.useMqtt
 
               TextField {
-                id: userField
-                width: (parent.width - Style.space(8)) / 2
-                placeholderText: "user"
-                foreground: root.foreground
-              }
-
-              TextField {
-                id: passwordField
-                width: (parent.width - Style.space(8)) / 2
-                placeholderText: "password"
+                id: mqttPasswordField
+                width: parent.width - mqttSave.width - Style.space(8)
+                placeholderText: root.service && root.service.mqttInfo.user
+                  ? "password for " + root.service.mqttInfo.user
+                  : "broker password"
                 password: true
                 foreground: root.foreground
+                onAccepted: mqttSave.clicked()
               }
-            }
-
-            Row {
-              spacing: Style.space(10)
 
               Button {
-                text: root.service && root.service.discovering
-                  ? "Detecting…" : "Detect cameras"
+                id: mqttSave
+                text: "Save"
                 bordered: true
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                enabled: root.service && !root.service.discovering
-                opacity: enabled ? 1 : 0.5
-                onClicked: if (root.service) root.service.discover()
+                onClicked: if (root.service) {
+                  root.service.storeMqttPassword(mqttPasswordField.text)
+                  mqttPasswordField.text = ""
+                }
               }
             }
 
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              visible: text !== ""
+              visible: root.service && root.service.config.alerts.useMqtt
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              text: !root.service ? ""
-                : (root.service.probeError || root.service.discoverError)
-            }
-
-            // Devices the last probe turned up. Adding one asks it for its
-            // stream URL with the credentials above and writes it to
-            // cameras.json.
-            Repeater {
-              model: root.service ? root.service.discovered : []
-
-              Row {
-                required property var modelData
-                width: parent.width
-                spacing: Style.space(8)
-
-                Column {
-                  width: parent.width - addButton.width - Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-
-                  Text {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text: modelData.name
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                  }
-                  Text {
-                    width: parent.width
-                    elide: Text.ElideRight
-                    text: modelData.host
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-                }
-
-                Button {
-                  id: addButton
-                  text: root.service && root.service.probing === modelData.xaddr
-                    ? "Adding…" : "Add"
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  enabled: root.service && root.service.probing === ""
-                  opacity: enabled ? 1 : 0.5
-                  onClicked: if (root.service) {
-                    root.service.probeDevice(modelData.xaddr, userField.text, passwordField.text)
-                  }
-                }
-              }
-            }
-
-            PanelSeparator {
-              foreground: root.foreground
-              visible: root.service && root.service.config.onvif.length > 0
-            }
-
-            PanelSectionHeader {
-              text: "Added by ONVIF"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              visible: root.service && root.service.config.onvif.length > 0
-            }
-
-            Repeater {
-              model: root.service ? root.service.config.onvif : []
-
-              Row {
-                required property var modelData
-                width: parent.width
-                spacing: Style.space(8)
-
-                Text {
-                  width: parent.width - removeButton.width - Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  elide: Text.ElideRight
-                  text: modelData.name + (modelData.ptz ? "  · PTZ" : "")
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                }
-
-                Button {
-                  id: removeButton
-                  text: "Remove"
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: if (root.service) root.service.removeOnvif(modelData.name)
-                }
+              text: {
+                if (!root.service) return ""
+                if (root.service.mqttError) return root.service.mqttError
+                var info = root.service.mqttInfo
+                return "Host, port, topic and user come from Frigate's own "
+                  + "config (" + info.host + ":" + info.port + ", "
+                  + info.prefix + "/events). Only the password is needed, and "
+                  + "it goes to the keyring."
               }
             }
           }

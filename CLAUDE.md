@@ -33,9 +33,15 @@ return "Target not found."
 
 ```bash
 node test_cameras.js   # Cameras.js: parsing, stream selection, event filtering
+python3 test_mqtt.py   # MQTT packet framing, event payload handling
 python3 test_onvif.py  # WS-Security digest, SOAP parsing, credential handling
 omarchy plugin validate .
 ```
+
+ONVIF is built and tested but deliberately not in the config UI while the
+Frigate side is being finished. `Cameras.onvifCameras`, the scripts and the
+`discover`/`discovery` IPC verbs all still work — do not delete them, and put
+the UI section back rather than rewriting it.
 
 Both test files are single scripts of `assert` calls with no framework — run
 them whole, there is nothing to run individually. Neither touches the network.
@@ -189,6 +195,26 @@ advance the mark past a shorter one that started earlier on another camera and
 swallow it. `lastEventTime` survives only to bound the query window
 (`after = newest - 120`); `seenEvents` (id → start_time) is what prevents
 repeats.
+
+**MQTT is a shortcut, never the only path.** `bin/omarchy-cameras-mqtt` is a
+stdlib MQTT 3.1.1 subscriber (four packet types) that streams one JSON line per
+detection; the Service parses `[{...}]` lines through the same `applyEvents` as
+HTTP. HTTP polling keeps running while `mqttConnected` is false, so a bad
+password degrades latency rather than losing alerts.
+
+**Do not bind `Process.running` for a process that exits on its own.** The exit
+writes `running`, which breaks the binding, so it never restarts. And do not
+give the retry `Timer` `triggeredOnStart` — a refused MQTT connection dies in
+70ms, so start-triggering it spawns a new process every few milliseconds (451
+of them before it was noticed). Drive the first attempt from
+`onMqttWantedChanged` and let a plain repeating timer own the backoff.
+
+Frigate's `/api/config` answers more than it looks like: the whole `mqtt` block
+(host, port, `topic_prefix`, user — never the password) and, indirectly, the
+go2rtc RTSP port. That port is not stated anywhere, but a restreamed camera
+feeds itself from the restream, so its own ffmpeg input is
+`rtsp://127.0.0.1:<port>/<name>` — `Cameras.restreamPort` reads it back out.
+Before adding a setting, check whether Frigate already knows the answer.
 
 **Prune `seenEvents` before re-marking the payload, never after.** A detection
 can stay in progress for hours — a parked car, a bicycle left in frame — and

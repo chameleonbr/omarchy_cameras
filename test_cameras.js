@@ -178,6 +178,40 @@ assert.equal(fromFrigate[0].source, "frigate")
 // MJPEG, because :8554/<name> for a camera go2rtc never heard of is a dead
 // stream and there is no way to tell from the tile.
 assert.equal(fromFrigate[0].stream, "rtsp://nvr.lan:8554/garagem")
+
+// --- restreamPort ----------------------------------------------------------
+//
+// /api/config never states the go2rtc RTSP port, but a restreamed camera pulls
+// from the restream, so its own ffmpeg input carries it. Reading it back from
+// there is what keeps the port off the settings form.
+
+const withLoopback = {
+  cameras: {
+    a: { ffmpeg: { inputs: [{ path: "rtsp://user:pw@192.168.1.5:554/live" }] } },
+    b: { ffmpeg: { inputs: [{ path: "rtsp://127.0.0.1:8555/b?video" }] } }
+  }
+}
+assert.equal(restreamPort(withLoopback, 8554), 8555, "the loopback input names the port")
+assert.equal(
+  restreamPort({ cameras: { b: { ffmpeg: { inputs: [{ path: "rtsp://localhost:1935/b" }] } } } }, 8554),
+  1935, "localhost counts too")
+assert.equal(
+  restreamPort({ cameras: { a: { ffmpeg: { inputs: [{ path: "rtsp://10.0.0.5:554/x" }] } } } }, 8554),
+  8554, "a real camera address is not the restream")
+assert.equal(restreamPort({}, 8554), 8554)
+assert.equal(restreamPort(null, 8554), 8554)
+assert.equal(
+  restreamPort({ cameras: { a: { ffmpeg: { inputs: [{ path: "rtsp://127.0.0.1:99999/x" }] } } } }, 8554),
+  8554, "an impossible port is ignored rather than trusted")
+
+// End to end: a config whose restream lives on a non-default port produces
+// stream URLs on that port.
+const oddPort = JSON.stringify({
+  cameras: { quintal: { ffmpeg: { inputs: [{ path: "rtsp://127.0.0.1:8555/quintal" }] } } },
+  go2rtc: { streams: { quintal: ["rtsp://cam/1"] } }
+})
+assert.equal(frigateCameras(oddPort, frigateConfig, "/run")[0].stream,
+  "rtsp://nvr.lan:8555/quintal")
 assert.equal(fromFrigate[1].stream, "http://nvr.lan:5000/api/quintal")
 
 // A config with no go2rtc section at all must not send every camera to a

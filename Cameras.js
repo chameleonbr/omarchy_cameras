@@ -13,7 +13,8 @@ var DEFAULT_CONFIG = {
     monitor: "",         // empty means "wherever the bar widget last was"
     position: "top-center",
     durationSec: 12,
-    width: 320
+    width: 320,
+    useMqtt: false
   },
   onvif: []
 }
@@ -83,7 +84,25 @@ function parseAlerts(raw, notifyLabels) {
     // Long enough to see what tripped it, short enough that a busy driveway
     // does not leave a window parked on the desktop.
     durationSec: clampInt(alerts.durationSec, DEFAULT_CONFIG.alerts.durationSec, 2, 300),
-    width: clampInt(alerts.width, DEFAULT_CONFIG.alerts.width, 120, 960)
+    width: clampInt(alerts.width, DEFAULT_CONFIG.alerts.width, 120, 960),
+    useMqtt: alerts.useMqtt === true
+  }
+}
+
+// Frigate's own MQTT settings, straight out of /api/config. Host, port, topic
+// prefix and username are all there, so the only thing the user ever has to
+// type is the password — and that goes to the keyring, not here.
+function frigateMqtt(raw) {
+  var parsed = null
+  try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
+  var mqtt = isObject(parsed) && isObject(parsed.mqtt) ? parsed.mqtt : {}
+  var port = parseInt(mqtt.port, 10)
+  return {
+    enabled: mqtt.enabled === true,
+    host: String(mqtt.host || ""),
+    port: isFinite(port) && port > 0 && port < 65536 ? port : 1883,
+    prefix: String(mqtt.topic_prefix || "frigate"),
+    user: String(mqtt.user || "")
   }
 }
 
@@ -183,6 +202,7 @@ function frigateCameras(raw, frigate, runtimeDir) {
   // Frigate installs restream a handful of cameras at most.
   var restreamed = isObject(parsed.go2rtc) && isObject(parsed.go2rtc.streams)
     ? parsed.go2rtc.streams : {}
+  var port = restreamPort(parsed, frigate.rtspPort)
 
   var out = []
   for (var name in parsed.cameras) {
@@ -198,11 +218,36 @@ function frigateCameras(raw, frigate, runtimeDir) {
       thumb: authed
         ? dir + "/" + slug(name) + ".jpg"
         : base + "/api/" + encodeURIComponent(name) + "/latest.jpg",
-      stream: streamFor(name, base, host, frigate.rtspPort, restreamed),
+      stream: streamFor(name, base, host, port, restreamed),
       ptz: false
     })
   }
   return out.sort(function(a, b) { return a.name < b.name ? -1 : 1 })
+}
+
+// The port go2rtc listens on for RTSP.
+//
+// Frigate does not report it directly — /api/config's go2rtc block only lists
+// streams — but a restreamed camera feeds itself from the restream, so its own
+// ffmpeg input is a loopback RTSP URL carrying the port. Reading it back out
+// of there beats asking the user for a number they would have to go and look
+// up in the same file.
+function restreamPort(parsed, fallback) {
+  var cameras = isObject(parsed) && isObject(parsed.cameras) ? parsed.cameras : {}
+  for (var name in cameras) {
+    var camera = cameras[name]
+    var ffmpeg = isObject(camera) ? camera.ffmpeg : null
+    var inputs = isObject(ffmpeg) && Array.isArray(ffmpeg.inputs) ? ffmpeg.inputs : []
+    for (var i = 0; i < inputs.length; i++) {
+      var path = isObject(inputs[i]) ? String(inputs[i].path || "") : ""
+      var match = /^rtsp:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)\//.exec(path)
+      if (match) {
+        var port = parseInt(match[1], 10)
+        if (isFinite(port) && port > 0 && port < 65536) return port
+      }
+    }
+  }
+  return fallback
 }
 
 // Best playable address for a Frigate camera.
