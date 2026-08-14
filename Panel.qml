@@ -372,12 +372,30 @@ Panel {
               }
             }
             trailingControl: Component {
-              Button {
-                text: root.view === "config" ? "Done" : "Config"
-                bordered: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.toggleConfig()
+              Row {
+                spacing: Style.space(8)
+
+                // Arming and disarming detection is the one setting worth
+                // reaching without opening the form, so it sits beside Config
+                // rather than inside it.
+                Button {
+                  text: root.alertsOn ? "Detection on" : "Detection off"
+                  bordered: true
+                  selected: root.alertsOn
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  enabled: root.service && root.service.config.frigate.url !== ""
+                  opacity: enabled ? 1 : 0.5
+                  onClicked: if (root.service) root.service.setAlertsEnabled(!root.alertsOn)
+                }
+
+                Button {
+                  text: root.view === "config" ? "Done" : "Config"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.toggleConfig()
+                }
               }
             }
           }

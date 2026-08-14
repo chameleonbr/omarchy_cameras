@@ -1,8 +1,12 @@
 # omarchy-cameras
 
-ONVIF and Frigate camera viewer for [Omarchy](https://omarchy.org) 4 ("Quattro").
+Frigate camera viewer for [Omarchy](https://omarchy.org) 4 ("Quattro").
 
-Live thumbnails in the bar, fullscreen playback in mpv.
+Live thumbnails in the bar, motion alerts as they happen, fullscreen playback
+in mpv.
+
+ONVIF discovery is written and tested but not yet exposed in the interface —
+this release is Frigate only.
 
 ## Why two layers
 
@@ -77,9 +81,12 @@ would just show an empty driveway.
 
 Everything about it is a setting in **Config → Motion alerts**: on/off, which
 labels count, which monitor, which corner (top-center sits by the clock),
-seconds on screen, and preview width. **Middle-click the bar icon** to arm or
-disarm without opening anything; the icon paints in the accent color while
-alerts are armed.
+seconds on screen, and preview width.
+
+Arming and disarming has two shortcuts that skip the form: the **Detection
+on/off** button beside Config, and **middle-clicking the bar icon**. While
+armed the bar icon is highlighted; switched off it goes back to the ordinary
+bar color, so a glance tells you whether windows can appear on their own.
 
 Changing the monitor, corner or width rehearses the placement: a black
 rectangle appears for 5s exactly where alerts will, so you can see the spot

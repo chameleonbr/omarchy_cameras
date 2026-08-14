@@ -18,9 +18,10 @@ omarchy-shell shell rescanPlugins
 omarchy plugin enable avila.cameras
 ```
 
-**Hot reload does not work through the symlink.** Neither saving a file nor
-`rescanPlugins` picks up an edit — the plugin registry's file watcher does not
-follow it. Every QML change needs:
+**Hot reload does not update the bar widget.** The registry logs "Local plugin
+changed, reloading", but the running widget keeps the old code — verified both
+through the dev symlink and with the plugin installed as a real directory, and
+`rescanPlugins` does not help either. Every QML change needs:
 
 ```bash
 omarchy restart shell && sleep 7
@@ -90,6 +91,9 @@ Three QML entry points plus two scripts:
 - **`Cameras.js`** — every pure function: config parsing, source merging,
   stream selection, event filtering, URL building. Anything testable belongs
   here rather than in QML.
+- **`bin/omarchy-cameras-frigate`** — authenticated Frigate access: login, one
+  fetch, and the thumbnail mirror.
+- **`bin/omarchy-cameras-mqtt`** — stdlib MQTT 3.1.1 subscriber.
 - **`bin/omarchy-cameras-onvif`** — stdlib-only Python. `discover` / `probe` /
   `stream-url`.
 - **`bin/omarchy-cameras-view`** — the mpv launcher.

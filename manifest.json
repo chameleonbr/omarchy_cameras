@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "avila.cameras",
   "name": "Cameras",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "Andre Avila",
   "license": "MIT",
-  "description": "ONVIF and Frigate camera viewer: live thumbnails in the bar, fullscreen playback in mpv.",
+  "description": "Frigate camera viewer: live thumbnails in the bar, motion alerts, fullscreen playback in mpv.",
   "kinds": [
     "service",
     "bar-widget"
@@ -16,7 +16,7 @@
   },
   "barWidget": {
     "displayName": "Cameras",
-    "description": "Live camera thumbnails; pick one to open it fullscreen in mpv.",
+    "description": "Live camera thumbnails and motion alerts; pick a camera to open it in mpv.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",
