@@ -8,7 +8,36 @@ in mpv.
 ONVIF discovery is written and tested but not yet exposed in the interface —
 this release is Frigate only.
 
-## Why two layers
+## Install
+
+```bash
+omarchy plugin add https://github.com/chameleonbr/omarchy_cameras.git --enable --yes
+```
+
+Then point it at Frigate (see Setup) and restart the shell once:
+
+```bash
+omarchy restart shell
+```
+
+## Setup
+
+Click the CCTV icon in the bar and hit **Config** (a fresh install opens
+straight there). The Frigate URL is the only required field — everything else,
+including the login, the motion alerts and MQTT, is optional and sits below it.
+Settings land in `~/.config/omarchy/cameras.json`; every password goes to the
+keyring instead, under `service=omarchy-cameras`.
+
+The same writes are available from a script:
+
+```bash
+omarchy-shell avila.cameras setFrigate http://nvr.lan:5000
+omarchy-shell avila.cameras mqtt on
+```
+
+## How it works
+
+### Two layers
 
 Wayland has no window embedding — no XEmbed, no `mpv --wid`. Either the pixels
 are produced inside the `omarchy-shell` process, or the video is a separate
@@ -146,33 +175,6 @@ o.window({ class = "mpv", title = "^omarchy-cameras:" }, {
   size = { 640, 360 },
   move = { "(monitor_w-680)", 60 },
 })
-```
-
-## Install
-
-```bash
-omarchy plugin add https://github.com/<you>/omarchy_cameras.git --enable --yes
-```
-
-Then point it at your cameras (see below) and restart the shell once:
-
-```bash
-omarchy restart shell
-```
-
-## Setup
-
-Click the CCTV icon in the bar and hit **Config** (a fresh install opens
-straight there). The Frigate URL is the only required field — everything else,
-including the login, the motion alerts and MQTT, is optional and sits below it.
-Settings land in `~/.config/omarchy/cameras.json`; every password goes to the
-keyring instead, under `service=omarchy-cameras`.
-
-The same writes are available from a script:
-
-```bash
-omarchy-shell avila.cameras setFrigate http://nvr.lan:5000
-omarchy-shell avila.cameras mqtt on
 ```
 
 ## Configuration
