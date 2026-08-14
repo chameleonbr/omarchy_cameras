@@ -181,6 +181,16 @@ it with `frigateEnabled()` inside anything `onConfigChanged` calls — the
 runs, so it still holds the previous answer and the Frigate fetch silently
 never fires. The binding is fine for UI and `Timer.running`.
 
+**ONVIF's `GetSnapshotUri` is not usable.** Both cameras tested advertise one
+and answer HTTP 500 to it — no auth, basic and digest alike. Thumbnails come
+from `omarchy-cameras-thumbd`, one long-lived ffmpeg per camera. Long-lived
+matters: a fresh ffmpeg waits for a keyframe, 54s on one camera here, while a
+held-open one delivers on schedule.
+
+A bash helper that ends in `wait` must `exit` from its signal trap. Returning
+from the trap drops straight back into `wait`, and the script outlives the grid
+that started it — kill the children, then leave.
+
 **Every external command belongs in `Cameras.REQUIRED_TOOLS`.** A missing
 binary makes `Process` fail to start, which emits no signal the plugin can see
 — no `exited`, no `streamFinished` — so the only symptom is a feature that

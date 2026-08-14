@@ -1,0 +1,72 @@
+#!/bin/bash
+# Keep a rolling thumbnail on disk for each ONVIF camera passed in.
+#
+#   omarchy-cameras-thumbd <interval> <name>=<rtsp-url>=<user>...
+#
+# Frigate renders a JPEG per camera and serves it at latest.jpg; a bare ONVIF
+# camera has no such thing. ONVIF does define GetSnapshotUri, but it is not
+# dependable — both cameras tested here advertise one and then answer HTTP 500
+# to every request, authenticated or not. Decoding a frame out of the RTSP
+# stream is what actually works everywhere.
+#
+# One long-lived ffmpeg per camera, not one run per frame: the first frame
+# costs a connection and a wait for a keyframe, which was 38s on one camera
+# here, while later frames arrive on schedule. Run this while thumbnails are on
+# screen and kill it when they are not.
+#
+# Credentials come from the keyring via omarchy-cameras-onvif, so no password
+# is ever passed in argv.
+
+set -uo pipefail
+
+RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cameras"
+mkdir -p "$RUNTIME"
+chmod 700 "$RUNTIME"
+
+HERE="$(dirname "$0")"
+interval="${1:?usage: omarchy-cameras-thumbd <interval> <name>=<rtsp>=<user>...}"
+shift
+(( $# )) || exit 0
+
+pids=()
+cleanup() {
+  # Disarm first: without this the exit below re-enters the trap.
+  trap - EXIT INT TERM
+  for pid in "${pids[@]:-}"; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
+  done
+  # ffmpeg mid-read does not always act on TERM promptly, and one survivor is
+  # enough to keep this script parked in `wait` forever.
+  sleep 0.3
+  for pid in "${pids[@]:-}"; do
+    [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null
+  done
+  # Leave outright. Returning from the trap would drop back into `wait`, which
+  # is exactly how an earlier version outlived the grid that started it.
+  exit 0
+}
+trap cleanup EXIT INT TERM
+
+for spec in "$@"; do
+  name="${spec%%=*}"
+  rest="${spec#*=}"
+  url="${rest%=*}"
+  user="${rest##*=}"
+
+  if [[ -n "$user" ]]; then
+    url="$("$HERE/omarchy-cameras-onvif" stream-url "$url" --user "$user" 2>/dev/null || echo "$url")"
+  fi
+
+  # -update 1 rewrites the same path in place, which is what the grid polls.
+  # No -y is needed for that, but keep it so a stale file from a previous run
+  # never blocks the first write.
+  ffmpeg -hide_banner -loglevel error -y \
+    -rtsp_transport tcp \
+    -i "$url" \
+    -vf "fps=1/${interval},scale=-2:180" \
+    -update 1 \
+    "$RUNTIME/$name.jpg" >/dev/null 2>&1 &
+  pids+=("$!")
+done
+
+wait

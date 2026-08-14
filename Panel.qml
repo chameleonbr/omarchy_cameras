@@ -841,7 +841,7 @@ Panel {
                 fontFamily: root.fontFamily
               }
 
-              FieldLabel { text: "Camera login, used for every device found" }
+              FieldLabel { text: "Camera login — each camera keeps its own" }
 
               Row {
                 width: parent.width
@@ -979,10 +979,10 @@ Panel {
               }
 
               Hint {
-                text: "Adding by address reads the camera's RTSP URL over "
-                  + "ONVIF, finding the port itself. Search uses WS-Discovery, "
-                  + "which many Wi-Fi access points drop between clients — if "
-                  + "it turns up nothing, type the address instead."
+                text: "Fill the login in before adding a camera; it is stored "
+                  + "per camera, so cameras with different logins just get "
+                  + "added one at a time. Adding reads the RTSP URL over "
+                  + "ONVIF and finds the port itself."
               }
 
               FieldLabel {

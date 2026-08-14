@@ -44,6 +44,7 @@ Item {
   readonly property string onvifScript: scriptPath("bin/omarchy-cameras-onvif")
   readonly property string frigateScript: scriptPath("bin/omarchy-cameras-frigate")
   readonly property string mqttScript: scriptPath("bin/omarchy-cameras-mqtt")
+  readonly property string thumbScript: scriptPath("bin/omarchy-cameras-thumbd")
 
   // With a username set, every Frigate request goes through the helper, which
   // logs in and carries the JWT cookie. Without one, plain curl is enough and
@@ -136,8 +137,20 @@ Item {
     mirrorProcess.running = true
   }
 
-  onThumbsWantedChanged: syncMirror()
-  onCamerasChanged: syncMirror()
+  // ONVIF cameras have no snapshot endpoint worth relying on, so a frame is
+  // decoded out of the RTSP stream instead. Same lifetime rule as the Frigate
+  // mirror: only while someone is looking.
+  function syncOnvifThumbs() {
+    var specs = Cameras.onvifThumbSpecs(cameras)
+    var want = thumbsWanted && specs.length > 0
+    thumbProcess.running = false
+    if (!want) return
+    thumbProcess.command = [thumbScript, "2"].concat(specs)
+    thumbProcess.running = true
+  }
+
+  onThumbsWantedChanged: { syncMirror(); syncOnvifThumbs() }
+  onCamerasChanged: { syncMirror(); syncOnvifThumbs() }
 
   // ------------------------------------------------------------- writing
 
@@ -625,6 +638,9 @@ Item {
 
   // Long-running: keeps the visible cameras' JPEGs fresh on disk until stopped.
   Process { id: mirrorProcess }
+
+  // One ffmpeg per ONVIF camera, held open for as long as the grid is up.
+  Process { id: thumbProcess }
 
   // The password goes over stdin, never argv, where any process on the machine
   // could read it out of /proc. Same EOF requirement as above.

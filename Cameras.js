@@ -35,7 +35,8 @@ var REQUIRED_TOOLS = [
   { name: "mpv", need: "opening a camera" },
   { name: "jq", need: "logging in to an authenticated Frigate" },
   { name: "secret-tool", need: "storing passwords" },
-  { name: "python3", need: "MQTT alerts and ONVIF discovery" }
+  { name: "python3", need: "MQTT alerts and ONVIF discovery" },
+  { name: "ffmpeg", need: "thumbnails for ONVIF cameras" }
 ]
 
 // One shell command that prints the name of each tool that is not on PATH.
@@ -394,6 +395,17 @@ function mergeCameras(frigate, onvif) {
     out.push(onvif[i])
   }
   return out
+}
+
+// "<name>=<rtsp>=<user>" triples for `omarchy-cameras-thumbd`, one per ONVIF
+// camera. No password: the helper reads that from the keyring, keyed on the
+// camera's own host, so two cameras with different logins each get their own.
+function onvifThumbSpecs(cameras) {
+  return cameras.filter(function(camera) {
+    return camera.source === "onvif" && camera.stream
+  }).map(function(camera) {
+    return slug(camera.name) + "=" + camera.stream + "=" + (camera.user || "")
+  })
 }
 
 // "<name>=<path>" pairs for `omarchy-cameras-frigate mirror`, one per Frigate

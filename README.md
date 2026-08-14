@@ -14,12 +14,12 @@ both at once.
 omarchy plugin add https://github.com/chameleonbr/omarchy_cameras.git --enable --yes
 ```
 
-It shells out to `curl`, `mpv`, `jq`, `secret-tool` and `python3`. Omarchy
-ships mpv, jq and libsecret; curl and python3 usually arrive as dependencies
-of something else, so a lean install can be missing them:
+It shells out to `curl`, `mpv`, `ffmpeg`, `jq`, `secret-tool` and `python3`.
+Omarchy ships mpv, ffmpeg, jq and libsecret; curl and python3 usually arrive as
+dependencies of something else, so a lean install can be missing them:
 
 ```bash
-sudo pacman -S --needed curl python jq mpv libsecret
+sudo pacman -S --needed curl python jq mpv ffmpeg libsecret
 ```
 
 Config names anything missing at the top of the screen rather than failing
@@ -115,9 +115,17 @@ Either way, adding a camera reads its RTSP URL over ONVIF with the credentials
 from the form, so the address never has to be typed. The password goes to the
 keyring under `key=onvif-<host>` and is spliced back in when mpv launches.
 
-Cameras added this way show a placeholder instead of a thumbnail: ONVIF has no
-snapshot endpoint, so there is nothing to poll the way Frigate's `latest.jpg`
-is polled. Opening one plays normally.
+Credentials are per camera. The login in the form is the one used for whichever
+camera you add next: the username is stored on that camera's entry and the
+password under `key=onvif-<host>`, so cameras with different logins are just
+added one at a time.
+
+Thumbnails come from the stream. ONVIF defines `GetSnapshotUri`, but it is not
+dependable — both cameras tested here advertise one and then answer HTTP 500 to
+every request, authenticated or not — so `omarchy-cameras-thumbd` holds one
+ffmpeg per visible camera and writes a frame every 2s instead. It runs only
+while the grid is open. The first frame waits for a keyframe, which took 4s on
+one camera here and 54s on another; the tile shows a placeholder until then.
 
 ### Which stream a camera plays
 
@@ -338,6 +346,7 @@ quickshell log -p $OMARCHY_PATH/shell -t 200 | grep -i avila
 | `AlertCard.qml` | one preview card, also used for the placement rehearsal |
 | `Cameras.js` | source merging, stream selection, event filtering, URL building — pure functions, no QML |
 | `bin/omarchy-cameras-frigate` | authenticated Frigate access: login, one-shot fetch, and the thumbnail mirror |
+| `bin/omarchy-cameras-thumbd` | one ffmpeg per ONVIF camera, writing a rolling thumbnail |
 | `bin/omarchy-cameras-mqtt` | stdlib MQTT 3.1.1 subscriber; one JSON line per detection |
 | `bin/omarchy-cameras-onvif` | WS-Discovery, stream lookup, keyring — stdlib Python |
 | `bin/omarchy-cameras-view` | the mpv launcher |

@@ -290,6 +290,33 @@ assert.equal(fromFrigate[0].thumbKind, "url", "no login means no mirror process"
 assert.deepEqual(mirrorSpecs(authedCams),
   ["garagem=/api/garagem/latest.jpg", "quintal=/api/quintal/latest.jpg"])
 assert.deepEqual(mirrorSpecs(fromFrigate), [], "nothing to mirror without auth")
+
+// --- onvifThumbSpecs -------------------------------------------------------
+//
+// ONVIF has no dependable snapshot endpoint — both cameras tested advertise
+// GetSnapshotUri and then answer HTTP 500 — so a frame comes out of the RTSP
+// stream instead.
+
+{
+  const cams = onvifCameras(parseConfig(JSON.stringify({
+    onvif: [
+      { name: "Front Door", rtsp: "rtsp://10.0.0.9/s0", user: "admin" },
+      { name: "shed", rtsp: "rtsp://10.0.0.8/s0" }
+    ]
+  })), "/run")
+  assert.deepEqual(onvifThumbSpecs(cams), [
+    "Front_Door=rtsp://10.0.0.9/s0=admin",
+    "shed=rtsp://10.0.0.8/s0="
+  ], "the file name is slugged; a camera with no login still gets a thumbnail")
+
+  // No password in there: the helper reads it from the keyring per host, which
+  // is what lets two cameras have different logins.
+  for (const spec of onvifThumbSpecs(cams)) {
+    assert.equal(spec.split("=").length, 3, spec)
+  }
+  assert.deepEqual(onvifThumbSpecs(fromFrigate), [],
+    "Frigate cameras already have latest.jpg")
+}
 assert.deepEqual(
   mirrorSpecs(frigateCameras(JSON.stringify({ cameras: { "back yard": {} } }), authed, "/run")),
   ["back_yard=/api/back%20yard/latest.jpg"],
