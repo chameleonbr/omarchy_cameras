@@ -38,6 +38,11 @@ fi
 # --loop-file=inf reopens the stream instead of closing the window when the
 # feed drops. Cameras and NVRs drop connections routinely, and a viewer that
 # vanishes on its own is worse than one that reconnects.
+#
+# The window opens at Omarchy's centered floating size. `f` is mpv's own
+# built-in fullscreen toggle, so the only thing missing was saying so — hence
+# the opening OSD line. --osd-playing-msg fires once when playback starts,
+# which is exactly when the window appears.
 exec mpv \
   --force-window=immediate \
   --profile=low-latency \
@@ -46,5 +51,8 @@ exec mpv \
   --no-osc \
   --keep-open=no \
   --loop-file=inf \
+  --osd-playing-msg="${name}          f  fullscreen     q  close" \
+  --osd-playing-msg-duration=4000 \
+  --osd-font-size=26 \
   --title="omarchy-cameras: ${name}" \
   -- "$stream"

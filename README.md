@@ -65,6 +65,11 @@ a small preview of whichever camera tripped — sized, timed, and placed where
 you tell it, on the monitor you tell it. Clicking the preview opens that camera
 full size; otherwise it disappears on its own.
 
+Several detections at once stack downwards, oldest at the top, so a burst reads
+in the order it happened. Four at a time: past that the column is taller than
+it is useful, and the oldest card drops off. Each card times out from when it
+appeared, so a late arrival still gets its full time on screen.
+
 The preview is the **still Frigate saved for that event**, with its bounding
 box, label and score drawn on (`snapshot.jpg?bbox=1`). It is deliberately not a
 live frame: quick movement is over long before anyone looks up, and a live feed
@@ -87,10 +92,14 @@ that file is gone adopts the current timestamp and shows nothing.
 
 ### The viewer window
 
-It is a plain floating `mpv`, which Omarchy already centers at 875x600. Not
-fullscreen, on purpose: Omarchy's rule for class `mpv` and mpv's own `--fs`
-fight each other, and every change in the video stream re-triggers the fight,
-so the window flips back to fullscreen whenever something moves in frame.
+It is a plain floating `mpv`, which Omarchy already centers at 875x600. Press
+**f** for fullscreen and **q** to close — mpv's own bindings, spelled out in a
+line of OSD text when the window opens.
+
+Not fullscreen from the start, on purpose: Omarchy's rule for class `mpv` and
+mpv's own `--fs` fight each other, and every change in the video stream
+re-triggers the fight, so the window flips back to fullscreen whenever
+something moves in frame.
 
 For a window parked in a corner instead of centered, add a rule of your own —
 the viewer titles its windows `omarchy-cameras: <name>`:
@@ -240,7 +249,8 @@ quickshell log -p $OMARCHY_PATH/shell -t 200 | grep -i avila
 | `Service.qml` | camera registry and every write to cameras.json; one instance per shell, shared by every monitor's bar |
 | `Panel.qml` | bar widget, popup grid, and the config form |
 | `CameraThumb.qml` | double-buffered thumbnail; swaps frames only once the next one has loaded, so a polled JPEG does not blink |
-| `Alert.qml` | the motion-alert preview window, owned by the service |
+| `Alert.qml` | the motion-alert window, owned by the service: a column of cards, oldest on top |
+| `AlertCard.qml` | one preview card, also used for the placement rehearsal |
 | `Cameras.js` | source merging, stream selection, event filtering, URL building — pure functions, no QML |
 | `bin/omarchy-cameras-frigate` | authenticated Frigate access: login, one-shot fetch, and the thumbnail mirror |
 | `bin/omarchy-cameras-onvif` | WS-Discovery, stream lookup, keyring — stdlib Python |

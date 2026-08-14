@@ -24,10 +24,7 @@ Item {
   property bool loading: false
   property string lastError: ""
 
-  // Event alerts. `alertCamera` non-null is what puts the preview on screen.
-  property var alertCamera: null
-  property string alertLabel: ""
-  property string alertImage: ""
+  // Event alerts. A non-empty alertModel is what puts previews on screen.
   property bool placementVisible: false
   // Newest Frigate event start_time already handled, persisted so a shell
   // restart does not replay the day's detections as a burst of previews.
@@ -229,7 +226,7 @@ Item {
 
   function showPlacement() {
     // A real alert outranks a rehearsal of where alerts go.
-    if (alertCamera) return
+    if (alertModel.count > 0) return
     placementVisible = true
     placementTimer.restart()
   }
@@ -251,36 +248,78 @@ Item {
     // Frigate still remembers looks new. Adopt the watermark, show nothing.
     if (firstRun || result.events.length === 0) return
 
-    var latest = result.events[result.events.length - 1]
+    // Oldest first, so a burst stacks in the order it happened: the first
+    // detection sits at the top and later ones appear underneath it.
+    for (var i = 0; i < result.events.length; i++) pushAlert(result.events[i])
+  }
+
+  function pushAlert(event) {
     var camera = null
     for (var i = 0; i < cameras.length; i++) {
-      if (cameras[i].name === latest.camera) { camera = cameras[i]; break }
+      if (cameras[i].name === event.camera) { camera = cameras[i]; break }
     }
     if (!camera) return
-    alertLabel = latest.label
-    alertCamera = camera
-    alertTimer.restart()
 
-    if (!frigateAuthed) {
-      alertImage = Cameras.eventImageUrl(config.frigate.url, latest)
+    // ponytail: four cards. Past that the column is taller than it is useful
+    // and the oldest is the least interesting, so it goes.
+    while (alertModel.count >= 4) alertModel.remove(0)
+
+    alertModel.append({
+      eventId: event.id,
+      cameraId: camera.id,
+      cameraName: camera.name,
+      label: event.label,
+      // Unauthenticated instances can point QML straight at Frigate. With a
+      // login the still has to be fetched with the cookie first, so the card
+      // goes up empty now and fills in when the file lands.
+      imageUrl: frigateAuthed ? "" : Cameras.eventImageUrl(config.frigate.url, event),
+      imagePath: Cameras.eventImagePath(event)
+    })
+    if (frigateAuthed) fetchNextShot()
+  }
+
+  // One download at a time, in arrival order — a burst of events should not
+  // open a burst of curls at the NVR.
+  property bool fetchingShot: false
+
+  function fetchNextShot() {
+    if (fetchingShot) return
+    for (var i = 0; i < alertModel.count; i++) {
+      var entry = alertModel.get(i)
+      if (entry.imageUrl !== "" || !entry.imagePath) continue
+      fetchingShot = true
+      eventShotProcess.pendingId = entry.eventId
+      eventShotProcess.command = [frigateScript, "save", config.frigate.url,
+        config.frigate.user, entry.imagePath, "event-" + Cameras.slug(entry.eventId)]
+      eventShotProcess.running = true
       return
     }
-    // Authenticated: the still has to be fetched with the cookie and handed to
-    // QML as a file. Show the card straight away and fill the picture in when
-    // it lands, rather than delaying the alert on a download.
-    alertImage = ""
-    eventShotProcess.running = false
-    eventShotProcess.command = [frigateScript, "save", config.frigate.url,
-      config.frigate.user, Cameras.eventImagePath(latest), "event"]
-    eventShotProcess.running = true
   }
 
-  function dismissAlert() {
-    alertTimer.stop()
-    alertCamera = null
-    alertLabel = ""
-    alertImage = ""
+  function applyShot(eventId, ok) {
+    fetchingShot = false
+    if (ok) {
+      for (var i = 0; i < alertModel.count; i++) {
+        if (alertModel.get(i).eventId !== eventId) continue
+        alertModel.setProperty(i, "imageUrl",
+          "file://" + runtimeDir + "/event-" + Cameras.slug(eventId) + ".jpg")
+        break
+      }
+    }
+    fetchNextShot()
   }
+
+  function dismissAlert(index) {
+    if (index >= 0 && index < alertModel.count) alertModel.remove(index)
+  }
+
+  function dismissAllAlerts() {
+    alertModel.clear()
+  }
+
+  // Each card owns its own expiry timer in Alert.qml, so the stack drains one
+  // card at a time in the order the detections arrived.
+  ListModel { id: alertModel }
 
   // ------------------------------------------------------------- frigate
 
@@ -422,13 +461,8 @@ Item {
 
   Process {
     id: eventShotProcess
-    onExited: function(code) {
-      // The name is fixed, so bust QML's cache with the event's own start
-      // time — two events in a row would otherwise show the first picture.
-      if (code === 0 && root.alertCamera) {
-        root.alertImage = "file://" + root.runtimeDir + "/event.jpg?t=" + root.lastEventTime
-      }
-    }
+    property string pendingId: ""
+    onExited: function(code) { root.applyShot(pendingId, code === 0) }
   }
 
   Process {
@@ -447,12 +481,6 @@ Item {
     printErrors: false
     onLoaded: root.lastEventTime = Number(text()) || 0
     onLoadFailed: root.lastEventTime = 0
-  }
-
-  Timer {
-    id: alertTimer
-    interval: root.config.alerts.durationSec * 1000
-    onTriggered: root.dismissAlert()
   }
 
   // Long enough to look at, short enough that changing two settings in a row
@@ -475,16 +503,16 @@ Item {
       }
       return screens.length > 0 ? screens[0] : null
     }
-    camera: root.alertCamera
-    label: root.alertLabel
-    imageUrl: root.alertImage
-    placeholder: root.placementVisible && root.alertCamera === null
+    model: alertModel
+    placeholder: root.placementVisible && alertModel.count === 0
     previewWidth: root.config.alerts.width
     position: root.config.alerts.position
-    onActivated: {
-      var camera = root.alertCamera
-      root.dismissAlert()
-      if (camera) root.view(camera.id)
+    durationSec: root.config.alerts.durationSec
+    onExpired: function(index) { root.dismissAlert(index) }
+    onActivated: function(index) {
+      var cameraId = alertModel.get(index).cameraId
+      root.dismissAlert(index)
+      root.view(cameraId)
     }
   }
 }

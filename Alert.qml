@@ -1,4 +1,5 @@
-// Small live preview that pops up when Frigate detects something.
+// Motion-alert previews: a column of small cards, one per unhandled Frigate
+// detection, oldest at the top so a burst reads in the order it happened.
 //
 // Owned by the service rather than declared as a `panel` plugin kind: adding
 // "panel" to the manifest would reroute `omarchy-shell shell toggle
@@ -14,24 +15,24 @@ import qs.Commons
 PanelWindow {
   id: root
 
-  property var camera: null
-  property string label: ""
-  // The still Frigate saved for the event, with its bounding box drawn.
-  // Static on purpose — see Cameras.eventImageUrl.
-  property string imageUrl: ""
-  // Placement rehearsal: same window, same geometry, no camera. Showing where
-  // alerts land by drawing the actual window beats any diagram of it.
+  property var model: null
+  // Placement rehearsal: same window, same geometry, no events. Showing where
+  // alerts land by drawing the actual card beats any diagram of it.
   property bool placeholder: false
   property int previewWidth: 320
+  property int durationSec: 12
   property string position: "top-center"
-  // Clearance below the bar, so the preview sits under it rather than behind.
+  // Clearance below the bar, so previews sit under it rather than behind.
   property int barClearance: Style.bar.sizeHorizontal
 
-  signal activated()
+  signal activated(int index)
+  signal expired(int index)
 
   readonly property int previewHeight: Math.round(previewWidth * 9 / 16)
+  readonly property int cardSpacing: Style.space(8)
+  readonly property bool hasAlerts: model !== null && model.count > 0
 
-  visible: camera !== null || placeholder
+  visible: hasAlerts || placeholder
   color: "transparent"
 
   WlrLayershell.namespace: "omarchy-cameras-alert"
@@ -41,15 +42,15 @@ PanelWindow {
   WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
   exclusionMode: ExclusionMode.Ignore
 
-  // Full-screen surface with the card placed inside, so the Wayland surface
-  // never resizes as the preview swaps cameras.
+  // Full-screen surface with the column placed inside, so the Wayland surface
+  // never resizes as cards come and go.
   anchors { top: true; bottom: true; left: true; right: true }
 
-  // Everything except the card itself stays click-through.
-  mask: Region { item: card }
+  // Everything except the cards themselves stays click-through.
+  mask: Region { item: column }
 
-  Rectangle {
-    id: card
+  Column {
+    id: column
 
     // Positioned with x/y off the window, not anchors, and measured against
     // root.width rather than parent.width. Two traps live here: assigning
@@ -65,69 +66,42 @@ PanelWindow {
     }
 
     width: root.previewWidth
-    height: root.previewHeight + caption.implicitHeight + Style.space(10)
-    radius: Style.cornerRadius
-    color: Color.popups.background
-    clip: true
+    spacing: root.cardSpacing
 
-    Rectangle {
-      id: frame
-      width: parent.width
-      height: root.previewHeight
-      color: root.placeholder ? "black" : Qt.darker(Color.popups.background, 1.3)
-      clip: true
-
-      // One fixed URL per event, so the Image cache is an asset here rather
-      // than the liability it is for polled thumbnails. PreserveAspectFit,
-      // not Crop: the bounding box is the point, and cropping can cut off the
-      // very thing that tripped the alert.
-      Image {
-        id: shot
-        anchors.fill: parent
-        fillMode: Image.PreserveAspectFit
-        asynchronous: true
-        visible: !root.placeholder
-        source: root.placeholder ? "" : root.imageUrl
-      }
-
-      Text {
-        anchors.centerIn: parent
-        visible: root.placeholder || shot.status !== Image.Ready
-        text: root.placeholder ? "👀" : "󰞮"
-        color: Qt.darker(Color.foreground, 1.55)
-        // The nerd-font glyph comes from the theme font; the emoji does not
-        // live there, so let fontconfig fall through to the emoji font.
-        font.family: root.placeholder ? "Noto Color Emoji" : Style.font.family
-        font.pixelSize: root.placeholder
-          ? Math.round(root.previewHeight * 0.42) : Style.font.display
-      }
+    // The rehearsal card. One only, and never alongside real alerts.
+    AlertCard {
+      visible: root.placeholder
+      width: root.previewWidth
+      previewHeight: root.previewHeight
+      placeholder: true
+      caption: "Alerts appear here"
     }
 
-    Text {
-      id: caption
-      anchors.top: frame.bottom
-      anchors.topMargin: Style.space(4)
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.leftMargin: Style.space(8)
-      anchors.rightMargin: Style.space(8)
-      elide: Text.ElideRight
-      text: root.placeholder
-        ? "Alerts appear here"
-        : (root.camera
-            ? root.camera.name + (root.label ? "  ·  " + root.label : "")
-            : "")
-      color: Color.foreground
-      font.family: Style.font.family
-      font.pixelSize: Style.font.caption
-    }
+    Repeater {
+      model: root.placeholder ? null : root.model
 
-    // A rehearsal is not clickable: there is no camera behind it to open.
-    MouseArea {
-      anchors.fill: parent
-      visible: !root.placeholder
-      cursorShape: Qt.PointingHandCursor
-      onClicked: root.activated()
+      AlertCard {
+        id: card
+        required property int index
+        required property string cameraName
+        required property string label
+        required property string imageUrl
+
+        width: root.previewWidth
+        previewHeight: root.previewHeight
+        source: imageUrl
+        caption: cameraName + (label ? "  ·  " + label : "")
+        onClicked: root.activated(card.index)
+
+        // Each card times out from when it appeared, so one that arrives late
+        // gets its full time on screen instead of inheriting what is left of
+        // an earlier card's.
+        Timer {
+          running: true
+          interval: root.durationSec * 1000
+          onTriggered: root.expired(card.index)
+        }
+      }
     }
   }
 }
