@@ -16,6 +16,9 @@ PanelWindow {
 
   property var camera: null
   property string label: ""
+  // Placement rehearsal: same window, same geometry, no camera. Showing where
+  // alerts land by drawing the actual window beats any diagram of it.
+  property bool placeholder: false
   property int previewWidth: 320
   property string position: "top-center"
   // Clearance below the bar, so the preview sits under it rather than behind.
@@ -26,7 +29,7 @@ PanelWindow {
 
   readonly property int previewHeight: Math.round(previewWidth * 9 / 16)
 
-  visible: camera !== null
+  visible: camera !== null || placeholder
   color: "transparent"
 
   WlrLayershell.namespace: "omarchy-cameras-alert"
@@ -46,13 +49,18 @@ PanelWindow {
   Rectangle {
     id: card
 
-    anchors.top: parent.top
-    anchors.topMargin: root.barClearance + Style.gapsOut
-    anchors.left: root.position === "top-left" ? parent.left : undefined
-    anchors.right: root.position === "top-right" ? parent.right : undefined
-    anchors.horizontalCenter: root.position === "top-center" ? parent.horizontalCenter : undefined
-    anchors.leftMargin: Style.gapsOut
-    anchors.rightMargin: Style.gapsOut
+    // Positioned with x/y off the window, not anchors, and measured against
+    // root.width rather than parent.width. Two traps live here: assigning
+    // `undefined` to anchors.left/right still counts as anchored, so QML
+    // derived the width from two unresolved edges and collapsed the card to
+    // -10px; and the content item's width does not track the surface, which
+    // put the card at x=1934 on a 1920px screen.
+    y: root.barClearance + Style.gapsOut
+    x: {
+      if (root.position === "top-left") return Style.gapsOut
+      if (root.position === "top-right") return root.width - width - Style.gapsOut
+      return Math.round((root.width - width) / 2)
+    }
 
     width: root.previewWidth
     height: root.previewHeight + caption.implicitHeight + Style.space(10)
@@ -64,13 +72,14 @@ PanelWindow {
       id: frame
       width: parent.width
       height: root.previewHeight
-      color: Qt.darker(Color.popups.background, 1.3)
+      color: root.placeholder ? "black" : Qt.darker(Color.popups.background, 1.3)
       clip: true
 
       CameraThumb {
         id: thumb
         anchors.fill: parent
-        camera: root.camera
+        visible: !root.placeholder
+        camera: root.placeholder ? null : root.camera
         tick: root.tick
       }
 
@@ -79,18 +88,21 @@ PanelWindow {
       // read as movement rather than as a still.
       Timer {
         interval: 500
-        running: root.visible
+        running: root.visible && !root.placeholder
         repeat: true
         onTriggered: root.tick++
       }
 
       Text {
         anchors.centerIn: parent
-        visible: !thumb.hasFrame
-        text: "󰞮"
+        visible: root.placeholder || !thumb.hasFrame
+        text: root.placeholder ? "👀" : "󰞮"
         color: Qt.darker(Color.foreground, 1.55)
-        font.family: Style.font.family
-        font.pixelSize: Style.font.display
+        // The nerd-font glyph comes from the theme font; the emoji does not
+        // live there, so let fontconfig fall through to the emoji font.
+        font.family: root.placeholder ? "Noto Color Emoji" : Style.font.family
+        font.pixelSize: root.placeholder
+          ? Math.round(root.previewHeight * 0.42) : Style.font.display
       }
     }
 
@@ -103,16 +115,20 @@ PanelWindow {
       anchors.leftMargin: Style.space(8)
       anchors.rightMargin: Style.space(8)
       elide: Text.ElideRight
-      text: root.camera
-        ? root.camera.name + (root.label ? "  ·  " + root.label : "")
-        : ""
+      text: root.placeholder
+        ? "Alerts appear here"
+        : (root.camera
+            ? root.camera.name + (root.label ? "  ·  " + root.label : "")
+            : "")
       color: Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
     }
 
+    // A rehearsal is not clickable: there is no camera behind it to open.
     MouseArea {
       anchors.fill: parent
+      visible: !root.placeholder
       cursorShape: Qt.PointingHandCursor
       onClicked: root.activated()
     }

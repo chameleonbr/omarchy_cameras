@@ -169,6 +169,19 @@ Panel {
       root.service.discover()
       return "ok"
     }
+    function showPlacement(): string {
+      if (!root.service) return "service unavailable"
+      root.service.showPlacement()
+      return "ok"
+    }
+    function discovery(): string {
+      if (!root.service) return "service unavailable"
+      var found = root.service.discovered.map(function(d) { return d.name })
+      return "discovering=" + root.service.discovering
+        + " probing=\"" + root.service.probing + "\""
+        + " found=[" + found.join(",") + "]"
+        + (root.service.discoverError ? " error=\"" + root.service.discoverError + "\"" : "")
+    }
     // Same write the config form does, for setting a machine up from a script.
     function setFrigate(url: string, rtspPort: string): string {
       if (!root.service) return "service unavailable"
@@ -508,6 +521,14 @@ Panel {
                   })
                 }
               }
+
+              Button {
+                text: "Show me"
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: if (root.service) root.service.showPlacement()
+              }
             }
 
             Text {
@@ -516,8 +537,10 @@ Panel {
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              text: "Seconds on screen, and preview width in pixels. Middle-click "
-                + "the bar icon to switch alerts off without opening this."
+              text: "Seconds on screen, and preview width in pixels. Changing "
+                + "the monitor, corner or width rehearses the placement for 5s. "
+                + "Middle-click the bar icon to switch alerts off without "
+                + "opening this."
             }
 
             PanelSeparator { foreground: root.foreground }

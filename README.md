@@ -44,6 +44,10 @@ seconds on screen, and preview width. **Middle-click the bar icon** to arm or
 disarm without opening anything; the icon paints in the accent color while
 alerts are armed.
 
+Changing the monitor, corner or width rehearses the placement: a black
+rectangle appears for 5s exactly where alerts will, so you can see the spot
+without waiting for something to walk past a camera. **Show me** replays it.
+
 The newest event's timestamp is kept in
 `~/.local/state/omarchy/cameras-last-event`, so restarting the shell does not
 replay the day's detections as a burst of previews. The very first poll after
@@ -154,6 +158,8 @@ Over IPC, for keybinds:
 omarchy-shell shell toggle avila.cameras '{}'   # grid, on the focused monitor
 omarchy-shell avila.cameras view garagem        # straight to one camera
 omarchy-shell avila.cameras alerts on           # or off; "" just reports
+omarchy-shell avila.cameras discovery           # ONVIF scan state
+omarchy-shell avila.cameras showPlacement       # rehearse the alert position
 omarchy-shell avila.cameras status
 ```
 

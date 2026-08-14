@@ -27,6 +27,7 @@ Item {
   // Event alerts. `alertCamera` non-null is what puts the preview on screen.
   property var alertCamera: null
   property string alertLabel: ""
+  property bool placementVisible: false
   // Newest Frigate event start_time already handled, persisted so a shell
   // restart does not replay the day's detections as a burst of previews.
   property real lastEventTime: 0
@@ -105,14 +106,17 @@ Item {
 
   // ----------------------------------------------------------- discovery
 
+  // StdioCollector.text is read-only — assigning to it throws, which would
+  // abort this function before the process ever starts and leave the button
+  // spinning forever. The collector resets itself on each run anyway.
   function discover() {
     if (discovering) return
     discovering = true
     discoverError = ""
     discovered = []
-    discoverStdout.text = ""
     discoverProcess.command = [onvifScript, "discover", "--timeout", "3"]
     discoverProcess.running = true
+    discoverWatchdog.restart()
   }
 
   function applyDiscovery(raw) {
@@ -135,10 +139,10 @@ Item {
     if (probing) return
     probing = xaddr
     probeError = ""
-    probeStdout.text = ""
     probeProcess.secret = password
     probeProcess.command = [onvifScript, "probe", xaddr, "--user", user]
     probeProcess.running = true
+    probeWatchdog.restart()
   }
 
   function applyProbe(raw) {
@@ -166,6 +170,19 @@ Item {
     for (var key in config.alerts) alerts[key] = config.alerts[key]
     for (var field in patch) alerts[field] = patch[field]
     saveConfig({ alerts: alerts })
+    // Placement is the one setting whose effect is invisible until something
+    // trips an alert, which could be hours away. Rehearse it immediately.
+    if (patch.monitor !== undefined || patch.position !== undefined
+        || patch.width !== undefined) {
+      showPlacement()
+    }
+  }
+
+  function showPlacement() {
+    // A real alert outranks a rehearsal of where alerts go.
+    if (alertCamera) return
+    placementVisible = true
+    placementTimer.restart()
   }
 
   function pollEvents() {
@@ -251,10 +268,29 @@ Item {
 
   Process {
     id: discoverProcess
-    stdout: StdioCollector { id: discoverStdout; waitForEnd: true }
-    onExited: {
+    stdout: StdioCollector {
+      id: discoverStdout
+      waitForEnd: true
+      // streamFinished, not exited: at exit the collector may not have the
+      // whole payload yet. It fires on failure too, with empty text, which
+      // applyDiscovery reports as unreadable.
+      onStreamFinished: {
+        discoverWatchdog.stop()
+        root.discovering = false
+        root.applyDiscovery(discoverStdout.text)
+      }
+    }
+  }
+
+  // A process that never starts — a missing or non-executable script — emits
+  // neither exited nor streamFinished, and the button would spin forever.
+  // Discovery itself is bounded at 3s inside the script.
+  Timer {
+    id: discoverWatchdog
+    interval: 10000
+    onTriggered: {
       root.discovering = false
-      root.applyDiscovery(discoverStdout.text)
+      root.discoverError = "Discovery did not finish — is bin/omarchy-cameras-onvif executable?"
     }
   }
 
@@ -262,14 +298,29 @@ Item {
     id: probeProcess
     property string secret: ""
     stdinEnabled: true
-    stdout: StdioCollector { id: probeStdout; waitForEnd: true }
+    stdout: StdioCollector {
+      id: probeStdout
+      waitForEnd: true
+      onStreamFinished: {
+        probeWatchdog.stop()
+        root.probing = ""
+        root.applyProbe(probeStdout.text)
+      }
+    }
     onStarted: {
       write(secret + "\n")
       secret = ""
     }
-    onExited: {
+  }
+
+  // Each SOAP call inside probe has its own 6s timeout and there are up to
+  // four of them, so give the whole exchange room before calling it stuck.
+  Timer {
+    id: probeWatchdog
+    interval: 30000
+    onTriggered: {
       root.probing = ""
-      root.applyProbe(probeStdout.text)
+      root.probeError = "Camera did not answer in time"
     }
   }
 
@@ -317,6 +368,14 @@ Item {
     onTriggered: root.dismissAlert()
   }
 
+  // Long enough to look at, short enough that changing two settings in a row
+  // does not leave a rehearsal parked on the screen.
+  Timer {
+    id: placementTimer
+    interval: 5000
+    onTriggered: root.placementVisible = false
+  }
+
   // One preview window, on the monitor the user picked. Quickshell.screens is
   // the authority on what exists; a monitor that has been unplugged since the
   // setting was saved falls back to the first one rather than showing nothing.
@@ -331,6 +390,7 @@ Item {
     }
     camera: root.alertCamera
     label: root.alertLabel
+    placeholder: root.placementVisible && root.alertCamera === null
     previewWidth: root.config.alerts.width
     position: root.config.alerts.position
     onActivated: {
