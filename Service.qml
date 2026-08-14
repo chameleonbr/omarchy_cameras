@@ -262,19 +262,49 @@ Item {
   readonly property bool mqttWanted: config.alerts.enabled && config.alerts.useMqtt
     && mqttInfo.enabled && mqttInfo.host !== ""
 
+  // One sentence the panel can show verbatim. Connecting takes a moment and
+  // failing takes 70ms, so without this the Save button looks like it did
+  // nothing either way.
+  readonly property string mqttStatus: {
+    if (!mqttInfo.enabled) return "Frigate has MQTT switched off"
+    if (!config.alerts.useMqtt) return "Off — alerts poll every 3s"
+    if (mqttConnected) return "Connected to " + mqttInfo.host
+    if (mqttError) return mqttError + " — still polling every 3s"
+    if (mqttRunning) return "Connecting to " + mqttInfo.host + "…"
+    return "Not connected — polling every 3s"
+  }
+
   function setMqttEnabled(enabled) {
+    if (enabled) mqttError = ""
     saveAlerts({ useMqtt: enabled === true })
   }
 
   function storeMqttPassword(password) {
-    if (!password || !mqttInfo.host) return
+    if (!mqttInfo.host) {
+      mqttError = "Frigate has not reported a broker yet"
+      return
+    }
+    if (!password) {
+      mqttError = "Enter the broker password first"
+      return
+    }
+    // Clear the last failure now, so the panel shows "connecting" rather than
+    // the stale reason the previous attempt was rejected for.
+    mqttError = ""
     mqttPasswordProcess.secret = String(password)
     mqttPasswordProcess.command = ["secret-tool", "store",
       "--label=Omarchy Frigate MQTT " + mqttInfo.host,
       "service", "omarchy-cameras", "key", "mqtt-" + mqttInfo.host]
     mqttPasswordProcess.running = true
-    // Reconnect with the new credential rather than waiting out the retry.
-    mqttRestart.restart()
+  }
+
+  // Reconnect as soon as the credential is on disk, rather than waiting out
+  // the retry interval. Doing it here and not in storeMqttPassword is what
+  // guarantees the client reads the new password and not the old one.
+  function reconnectMqtt() {
+    mqttConnected = false
+    mqttProcess.running = false
+    if (mqttWanted) mqttProcess.running = true
   }
 
   function handleMqttLine(line) {
@@ -609,6 +639,10 @@ Item {
     onStarted: {
       write(secret + "\n")
       secret = ""
+    }
+    onExited: function(code) {
+      if (code === 0) root.reconnectMqtt()
+      else root.mqttError = "Could not save the password to the keyring"
     }
   }
 

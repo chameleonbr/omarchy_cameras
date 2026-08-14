@@ -35,7 +35,42 @@ Panel {
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.55)
+  // The bar exposes `urgent` but not `accent`, so the theme singleton is the
+  // source for that one.
+  readonly property color accent: Color.accent
+  readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+
+  // Three shapes the config form repeats: the label above a field, the
+  // explanatory line under a group, and the right-aligned row of buttons that
+  // acts on the fields above it. Defining them once is what keeps every
+  // section laid out the same way.
+  component FieldLabel: Text {
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.bold: true
+  }
+
+  component Hint: Text {
+    width: parent ? parent.width : 0
+    wrapMode: Text.WordWrap
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  component Actions: Item {
+    default property alias buttons: actionRow.children
+    width: parent ? parent.width : 0
+    implicitHeight: actionRow.implicitHeight
+
+    Row {
+      id: actionRow
+      anchors.right: parent.right
+      spacing: Style.space(8)
+    }
+  }
 
   readonly property int tileWidth: Style.space(170)
   readonly property int tileHeight: Math.round(tileWidth * 9 / 16)
@@ -147,7 +182,12 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function config(): void { root.view = "config"; root.open() }
+    // Open first, then switch: onOpenedChanged picks the view when the panel
+    // opens, so setting it beforehand just gets overwritten.
+    function config(): void {
+      root.open()
+      root.showConfig()
+    }
     function refresh(): string {
       if (!root.service) return "service unavailable"
       root.service.refresh()
@@ -269,7 +309,10 @@ Panel {
           // Slack for the overlay scrollbar, which the grid outgrows as soon
           // as there are more than a handful of cameras.
           : root.gridWidth + Style.space(12)))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(620))
+    // fittedContentHeight clamps to the screen anyway, so the cap only has
+    // to be generous enough that the config form is not cut off before
+    // its last section.
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(900))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -429,6 +472,8 @@ Panel {
               fontFamily: root.fontFamily
             }
 
+            FieldLabel { text: "Server URL" }
+
             TextField {
               id: urlField
               width: parent.width
@@ -437,18 +482,7 @@ Panel {
               onAccepted: saveFrigate.clicked()
             }
 
-            Button {
-              id: saveFrigate
-              text: "Save"
-              bordered: true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: if (root.service) {
-                root.service.setFrigate(urlField.text,
-                  frigateUserField.text, frigatePasswordField.text)
-                frigatePasswordField.text = ""
-              }
-            }
+            FieldLabel { text: "Login — only if Frigate asks for one" }
 
             Row {
               width: parent.width
@@ -457,7 +491,7 @@ Panel {
               TextField {
                 id: frigateUserField
                 width: (parent.width - Style.space(8)) / 2
-                placeholderText: "user (if auth is on)"
+                placeholderText: "user"
                 foreground: root.foreground
                 onAccepted: saveFrigate.clicked()
               }
@@ -472,14 +506,24 @@ Panel {
               }
             }
 
-            Text {
-              width: parent.width
-              wrapMode: Text.WordWrap
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              text: "Frigate 0.15+ has auth on by default — fill in the login "
-                + "and the password goes to the keyring, never to the config file."
+            Actions {
+              Button {
+                id: saveFrigate
+                text: "Save"
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: if (root.service) {
+                  root.service.setFrigate(urlField.text,
+                    frigateUserField.text, frigatePasswordField.text)
+                  frigatePasswordField.text = ""
+                }
+              }
+            }
+
+            Hint {
+              text: "Passwords go to the keyring, never to the config file. "
+                + "Leaving one blank keeps the one already stored."
             }
 
             PanelSeparator { foreground: root.foreground }
@@ -494,161 +538,189 @@ Panel {
               width: parent.width
               label: "Pop up a preview on detection"
               description: root.service && !root.service.config.frigate.url
-                ? "Needs a Frigate URL" : "Frigate events only"
-              checked: root.service && root.service.config.alerts.enabled
+                ? "Needs a Frigate URL first" : "From Frigate's own detections"
+              checked: root.alertsOn
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.setAlertsEnabled(!checked)
             }
 
-            Dropdown {
+            // Everything below only matters once alerts are on, and hiding it
+            // keeps the form short enough to read without scrolling.
+            Column {
               width: parent.width
-              label: "Monitor"
-              value: root.service ? root.service.config.alerts.monitor : ""
-              options: root.monitorOptions
-              fontFamily: root.fontFamily
-              onChanged: function(v) { if (root.service) root.service.saveAlerts({ monitor: v }) }
-            }
+              spacing: Style.space(10)
+              visible: root.alertsOn
 
-            Dropdown {
-              width: parent.width
-              label: "Corner"
-              value: root.service ? root.service.config.alerts.position : "top-center"
-              options: [
-                { value: "top-left", label: "Top left" },
-                { value: "top-center", label: "Top center (by the clock)" },
-                { value: "top-right", label: "Top right" }
-              ]
-              fontFamily: root.fontFamily
-              onChanged: function(v) { if (root.service) root.service.saveAlerts({ position: v }) }
-            }
-
-            Row {
-              width: parent.width
-              spacing: Style.space(8)
-
-              TextField {
-                id: durationField
-                width: Style.space(90)
-                placeholderText: "seconds"
-                foreground: root.foreground
-                inputMethodHints: Qt.ImhDigitsOnly
-                validator: IntValidator { bottom: 2; top: 300 }
-                onAccepted: saveAlertSizing.clicked()
-              }
-
-              TextField {
-                id: alertWidthField
-                width: Style.space(90)
-                placeholderText: "width px"
-                foreground: root.foreground
-                inputMethodHints: Qt.ImhDigitsOnly
-                validator: IntValidator { bottom: 120; top: 960 }
-                onAccepted: saveAlertSizing.clicked()
-              }
-
-              Button {
-                id: saveAlertSizing
-                text: "Save"
-                bordered: true
-                foreground: root.foreground
+              Dropdown {
+                width: parent.width
+                label: "Monitor"
+                value: root.service ? root.service.config.alerts.monitor : ""
+                options: root.monitorOptions
                 fontFamily: root.fontFamily
-                onClicked: if (root.service) {
-                  root.service.saveAlerts({
-                    durationSec: parseInt(durationField.text, 10) || 12,
-                    width: parseInt(alertWidthField.text, 10) || 320
-                  })
+                onChanged: function(v) { if (root.service) root.service.saveAlerts({ monitor: v }) }
+              }
+
+              Dropdown {
+                width: parent.width
+                label: "Corner"
+                value: root.service ? root.service.config.alerts.position : "top-center"
+                options: [
+                  { value: "top-left", label: "Top left" },
+                  { value: "top-center", label: "Top center (by the clock)" },
+                  { value: "top-right", label: "Top right" }
+                ]
+                fontFamily: root.fontFamily
+                onChanged: function(v) { if (root.service) root.service.saveAlerts({ position: v }) }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(12)
+
+                Column {
+                  spacing: Style.space(4)
+                  FieldLabel { text: "Seconds on screen" }
+                  TextField {
+                    id: durationField
+                    width: Style.space(100)
+                    placeholderText: "12"
+                    foreground: root.foreground
+                    inputMethodHints: Qt.ImhDigitsOnly
+                    validator: IntValidator { bottom: 2; top: 300 }
+                    onAccepted: saveAlertSizing.clicked()
+                  }
+                }
+
+                Column {
+                  spacing: Style.space(4)
+                  FieldLabel { text: "Preview width" }
+                  TextField {
+                    id: alertWidthField
+                    width: Style.space(100)
+                    placeholderText: "320"
+                    foreground: root.foreground
+                    inputMethodHints: Qt.ImhDigitsOnly
+                    validator: IntValidator { bottom: 120; top: 960 }
+                    onAccepted: saveAlertSizing.clicked()
+                  }
                 }
               }
 
-              Button {
-                text: "Show me"
-                bordered: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: if (root.service) root.service.showPlacement()
+              Actions {
+                Button {
+                  text: "Show me"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: if (root.service) root.service.showPlacement()
+                }
+
+                Button {
+                  id: saveAlertSizing
+                  text: "Save"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: if (root.service) {
+                    root.service.saveAlerts({
+                      durationSec: parseInt(durationField.text, 10) || 12,
+                      width: parseInt(alertWidthField.text, 10) || 320
+                    })
+                  }
+                }
+              }
+
+              Hint {
+                text: "Changing the monitor, corner or width rehearses the "
+                  + "placement for 5s. Middle-click the bar icon to switch "
+                  + "alerts off without opening this."
               }
             }
 
-            Text {
-              width: parent.width
-              wrapMode: Text.WordWrap
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              text: "Seconds on screen, and preview width in pixels. Changing "
-                + "the monitor, corner or width rehearses the placement for 5s. "
-                + "Middle-click the bar icon to switch alerts off without "
-                + "opening this."
+            PanelSeparator {
+              foreground: root.foreground
+              visible: root.alertsOn
             }
-
-            PanelSeparator { foreground: root.foreground }
 
             PanelSectionHeader {
               text: "MQTT"
               foreground: root.foreground
               fontFamily: root.fontFamily
+              visible: root.alertsOn
             }
 
             Toggle {
               width: parent.width
+              visible: root.alertsOn
               label: "Alert the instant Frigate detects"
-              description: !root.service ? ""
-                : (!root.service.mqttInfo.enabled
-                    ? "Frigate has MQTT switched off"
-                    : (root.service.mqttConnected
-                        ? "Connected to " + root.service.mqttInfo.host
-                        : "Polling every 3s until the broker answers"))
+              description: root.service ? root.service.mqttStatus : ""
               checked: root.service && root.service.config.alerts.useMqtt
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.setMqttEnabled(!checked)
             }
 
-            Row {
+            Column {
               width: parent.width
-              spacing: Style.space(8)
-              visible: root.service && root.service.config.alerts.useMqtt
+              spacing: Style.space(10)
+              visible: root.alertsOn && root.service && root.service.config.alerts.useMqtt
 
-              TextField {
-                id: mqttPasswordField
-                width: parent.width - mqttSave.width - Style.space(8)
-                placeholderText: root.service && root.service.mqttInfo.user
-                  ? "password for " + root.service.mqttInfo.user
-                  : "broker password"
-                password: true
-                foreground: root.foreground
-                onAccepted: mqttSave.clicked()
+              FieldLabel {
+                text: root.service && root.service.mqttInfo.user
+                  ? "Broker password for " + root.service.mqttInfo.user
+                  : "Broker password"
               }
 
-              Button {
-                id: mqttSave
-                text: "Save"
-                bordered: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: if (root.service) {
-                  root.service.storeMqttPassword(mqttPasswordField.text)
-                  mqttPasswordField.text = ""
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                TextField {
+                  id: mqttPasswordField
+                  width: parent.width - mqttSave.width - Style.space(8)
+                  placeholderText: "password"
+                  password: true
+                  foreground: root.foreground
+                  onAccepted: mqttSave.clicked()
+                }
+
+                Button {
+                  id: mqttSave
+                  text: "Connect"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: if (root.service) {
+                    root.service.storeMqttPassword(mqttPasswordField.text)
+                    mqttPasswordField.text = ""
+                  }
                 }
               }
-            }
 
-            Text {
-              width: parent.width
-              wrapMode: Text.WordWrap
-              visible: root.service && root.service.config.alerts.useMqtt
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              text: {
-                if (!root.service) return ""
-                if (root.service.mqttError) return root.service.mqttError
-                var info = root.service.mqttInfo
-                return "Host, port, topic and user come from Frigate's own "
-                  + "config (" + info.host + ":" + info.port + ", "
-                  + info.prefix + "/events). Only the password is needed, and "
-                  + "it goes to the keyring."
+              // Connecting takes a moment and failing takes 70ms, so without
+              // this the Connect button looks like it did nothing either way.
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: root.service ? root.service.mqttStatus : ""
+                color: !root.service ? root.dim
+                  : (root.service.mqttConnected ? root.accent
+                      : (root.service.mqttError ? root.urgent : root.dim))
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: root.service
+                  && (root.service.mqttConnected || root.service.mqttError !== "")
+              }
+
+              Hint {
+                text: {
+                  if (!root.service) return ""
+                  var info = root.service.mqttInfo
+                  return "Broker, port, topic and user all come from Frigate ("
+                    + info.host + ":" + info.port + ", " + info.prefix
+                    + "/events). Polling keeps running until this connects."
+                }
               }
             }
           }
