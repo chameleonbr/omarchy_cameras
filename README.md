@@ -1,356 +1,196 @@
-# omarchy-cameras
+# Cameras for Omarchy
 
-Frigate camera viewer for [Omarchy](https://omarchy.org) 4 ("Quattro").
+Watch your cameras without leaving the Omarchy bar. The plugin shows a grid of
+live thumbnails, opens any camera full size in mpv, and pops up a preview the
+moment Frigate detects something. Cameras come from Frigate, from ONVIF
+discovery on the local network, or from both.
 
-Live thumbnails in the bar, motion alerts as they happen, fullscreen playback
-in mpv.
-
-Cameras come from Frigate, from ONVIF discovery on the local network, or from
-both at once.
+![Camera grid in the Omarchy bar](preview.png)
 
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/chameleonbr/omarchy_cameras.git --enable --yes
+omarchy plugin add \
+  https://github.com/chameleonbr/omarchy_cameras.git \
+  --enable \
+  --yes
 ```
 
-It shells out to `curl`, `mpv`, `ffmpeg`, `jq`, `secret-tool` and `python3`.
-Omarchy ships mpv, ffmpeg, jq and libsecret; curl and python3 usually arrive as
-dependencies of something else, so a lean install can be missing them:
-
-```bash
-sudo pacman -S --needed curl python jq mpv ffmpeg libsecret
-```
-
-Config names anything missing at the top of the screen rather than failing
-quietly — a command that is not there makes the plugin's helper processes fail
-to start, which otherwise shows up nowhere.
-
-Then point it at Frigate (see Setup) and restart the shell once:
+The widget starts on the right side of the bar and can be moved with Omarchy's
+bar customization controls. Restart the shell once after installing:
 
 ```bash
 omarchy restart shell
 ```
 
-## Setup
-
-Click the CCTV icon in the bar and hit **Config** (a fresh install opens
-straight there). Start by switching on the sources you actually have —
-**Frigate**, **ONVIF cameras**, or both. Each one's settings only appear once
-it is on, so an ONVIF-only setup never has to read about restreams or MQTT.
-
-Settings land in `~/.config/omarchy/cameras.json`; every password goes to the
-keyring instead, under `service=omarchy-cameras`.
-
-A source that is off contributes no cameras and starts no background
-processes.
-
-The same writes are available from a script:
+The plugin calls `curl`, `mpv`, `ffmpeg`, `jq`, `secret-tool` and `python3`.
+Omarchy ships all but `curl` and `python3`, which normally arrive as
+dependencies of something else:
 
 ```bash
-omarchy-shell avila.cameras setFrigate http://nvr.lan:5000
-omarchy-shell avila.cameras mqtt on
+sudo pacman -S --needed curl python jq mpv ffmpeg libsecret
 ```
 
-## How it works
+Anything missing is named at the top of **Config** rather than failing quietly.
 
-### Two layers
+## Set up
 
-Wayland has no window embedding — no XEmbed, no `mpv --wid`. Either the pixels
-are produced inside the `omarchy-shell` process, or the video is a separate
-Hyprland window. This plugin uses each where it is good:
+Select the bar icon, then **Config**. Switch on the sources you have — each
+one's settings appear only once it is on, so an ONVIF-only setup never has to
+read about restreams.
 
-| Layer | What | Where |
-|-------|------|-------|
-| 1 — thumbnails | a JPEG per camera, refreshed every ~2s | inside the shell, in the popup grid |
-| 2 — focused view | the real stream, hardware decoded | a floating `mpv` window |
+**Frigate.** Enter the server URL. Everything else is read from Frigate itself:
+the camera list, the go2rtc restream port, and the MQTT broker. Fill in a login
+only if your Frigate asks for one.
 
-Nobody watches nine streams at once. Decoding nine of them to fill 170px tiles
-would spend a lot of CPU on pictures too small to read.
+**ONVIF cameras.** Fill in the camera login, then either **Search the network**
+or type an address under **Add one by address**. Adding a camera reads its RTSP
+URL over ONVIF, so the address never has to be typed by hand. The login is
+stored per camera, so cameras with different credentials are added one at a
+time.
 
-### If Frigate requires a login
+Passwords go to the system keyring, never to the config file.
 
-Frigate 0.15+ ships with auth on. Fill in **user** and **password** next to the
-URL in Config; the password goes to the keyring (`service=omarchy-cameras`,
-`key=frigate-<host>`) and never into `cameras.json`. Only the username is
-stored there, which is what tells the plugin a login is needed at all.
+## Use
 
-Leaving the password blank on a later save keeps the one already stored, so
-re-saving the URL will not wipe a working login.
+- Select any tile to open that camera in mpv. Press `f` there for fullscreen,
+  `q` to close.
+- Select **Detection on/off** to arm or disarm motion alerts. While armed the
+  bar icon takes the theme's accent color.
+- Middle-click the bar icon to arm or disarm without opening anything.
+- Right-click the bar icon to refresh.
 
-Behind the scenes an authenticated instance works differently, because QML
-fetches image URLs itself and cannot be handed Frigate's JWT cookie: while the
-grid is open, `omarchy-cameras-frigate mirror` keeps each visible camera's JPEG
-fresh in `$XDG_RUNTIME_DIR/omarchy-cameras/` and the tiles read those files. It
-runs only while thumbnails are on screen, and only when a login is configured —
-without one, nothing extra runs at all.
+| Key     | Action                   |
+| ------- | ------------------------ |
+| arrows  | move between cameras     |
+| `Enter` | open the selected camera |
+| `R`     | refresh                  |
+| `C`     | show or hide Config      |
+| `Esc`   | close                    |
 
-To store the password from a script instead:
+For a keybinding, `omarchy-shell shell toggle avila.cameras '{}'` opens the
+grid on the focused monitor, and `omarchy-shell avila.cameras view <name>`
+jumps straight to one camera.
+
+## Motion alerts
+
+Off by default. Once armed, a small preview of whichever camera tripped appears
+for a few seconds and then goes away; selecting it opens that camera full size.
+Several detections stack, oldest on top.
+
+The preview is the still Frigate saved for the event, with its bounding box and
+label drawn on. Alerts fire while the detection is still happening rather than
+after it ends, so the preview arrives in seconds instead of after the subject
+has left.
+
+**Config → Motion alerts** sets which labels count, which monitor, which
+corner, how long it stays and how wide it is. Changing the monitor, corner or
+width rehearses the placement, so you can see the spot without waiting for
+something to walk past a camera.
+
+**Config → MQTT** is optional and only makes alerts faster: Frigate publishes a
+detection the instant it makes one. Measured against a live camera, 0.6-0.7s
+instead of 3.9-9.1s. Only the broker password is needed — everything else comes
+from Frigate. HTTP polling keeps running whenever the broker is not connected,
+so a wrong password costs latency, not alerts.
+
+## Remove
 
 ```bash
-bin/omarchy-cameras-frigate store-password http://nvr.lan:5000   # reads stdin
-omarchy-shell avila.cameras setFrigate http://nvr.lan:5000 admin
+omarchy plugin remove avila.cameras --yes
 ```
 
-`setFrigate` deliberately takes no password — it would end up in shell history
-and in the process's argv.
+Settings and stored passwords are left behind. To remove those too:
 
-### Finding ONVIF cameras
-
-**Search the network** sends a WS-Discovery Probe to the multicast group and,
-because that alone finds nothing on most setups, also one directly to every
-address on the local subnet. About twelve seconds for a /24.
-
-The unicast sweep is what makes it work. A multicast reply arrives as an
-inbound packet with no matching outbound flow, so a default-deny firewall drops
-it — `ufw` does, out of the box — and plenty of Wi-Fi access points never
-forward the multicast between clients either. A unicast probe is an ordinary
-tracked exchange, and every camera that answers the group answers it too.
-
-**Add one by address** covers the rest: type `192.168.1.64`, or
-`192.168.1.64:2020` if you know the port. The port is worth not guessing —
-six cameras on one network here answered on 80, 2020, 8000, 8899 and 10000.
-
-Either way, adding a camera reads its RTSP URL over ONVIF with the credentials
-from the form, so the address never has to be typed. The password goes to the
-keyring under `key=onvif-<host>` and is spliced back in when mpv launches.
-
-Credentials are per camera. The login in the form is the one used for whichever
-camera you add next: the username is stored on that camera's entry and the
-password under `key=onvif-<host>`, so cameras with different logins are just
-added one at a time.
-
-Thumbnails come from the stream. ONVIF defines `GetSnapshotUri`, but it is not
-dependable — both cameras tested here advertise one and then answer HTTP 500 to
-every request, authenticated or not — so `omarchy-cameras-thumbd` holds one
-ffmpeg per visible camera and writes a frame every 2s instead. It runs only
-while the grid is open. The first frame waits for a keyframe, which took 4s on
-one camera here and 54s on another; the tile shows a placeholder until then.
-
-### Which stream a camera plays
-
-Frigate only restreams the cameras listed under `go2rtc:` in its own config.
-For those, the viewer plays `rtsp://<frigate-host>:8554/<camera>` — the good
-path: the codec passes through untouched and Frigate keeps the only connection
-to the camera. For every other camera it plays `http://<frigate>/api/<camera>`,
-Frigate's MJPEG of the detect feed: heavier on the wire and softer, but it
-exists for every camera with no configuration. Asking for a restream that
-isn't there just yields a dead window.
-
-To upgrade a camera, add it to `go2rtc:` in Frigate's config — nothing changes
-here, the plugin picks it up on the next refresh.
-
-### Motion alerts
-
-Off by default. Once armed, the plugin watches Frigate for detections and pops
-a small preview of whichever camera tripped — sized, timed, and placed where
-you tell it, on the monitor you tell it. Clicking the preview opens that camera
-full size; otherwise it disappears on its own.
-
-Several detections at once stack downwards, oldest at the top, so a burst reads
-in the order it happened. Four at a time: past that the column is taller than
-it is useful, and the oldest card drops off. Each card times out from when it
-appeared, so a late arrival still gets its full time on screen.
-
-The preview is the **still Frigate saved for that event**, with its bounding
-box, label and score drawn on (`snapshot.jpg?bbox=1`). It is deliberately not a
-live frame: quick movement is over long before anyone looks up, and a live feed
-would just show an empty driveway.
-
-Everything about it is a setting in **Config → Motion alerts**: on/off, which
-labels count, which monitor, which corner (top-center sits by the clock),
-seconds on screen, and preview width.
-
-Arming and disarming has two shortcuts that skip the form: the **Detection
-on/off** button beside Config, and **middle-clicking the bar icon**. While
-armed the bar icon takes the theme's accent color; switched off it goes back to
-the ordinary bar color, so a glance tells you whether windows can appear on
-their own.
-
-Not the usual `bar.active` red, which themes reserve for recording and pending
-updates: armed alerts are a normal working state, not something wrong.
-
-Changing the monitor, corner or width rehearses the placement: a black
-rectangle appears for 5s exactly where alerts will, so you can see the spot
-without waiting for something to walk past a camera. **Show me** replays it.
-
-Alerts fire **while the detection is still happening**, not once it is over.
-The poll asks Frigate only for `in_progress=1`; its plain `/api/events` returns
-events that have already ended, which is exactly the delay worth avoiding.
-Measured against a live camera: the preview lands 4-9s after the detection
-starts, while the event is still running.
-
-The trade is that a detection which starts and finishes inside one poll
-interval is never seen, so the poll runs every 3s.
-
-### MQTT
-
-Optional, and strictly a shortcut: Frigate publishes a detection to MQTT the
-instant it makes one, with no poll interval in the way. Switch it on in
-**Config → MQTT**.
-
-Measured against the same live camera: **0.6-0.7s** from the start of a
-detection to the preview, where polling took 3.9-9.1s.
-
-Nothing has to be typed but the password. Host, port, topic prefix and username
-all come from Frigate's own `/api/config`, and the password goes to the keyring
-under `key=mqtt-<host>`.
-
-Polling never stops while the broker is not actually connected — a wrong
-password or a broker reboot costs latency, not alerts. The client retries every
-15s in the background. The toggle's subtitle says which path is live.
-
-A running detection is reported on every poll until it ends, so alerts
-deduplicate on the event id. The newest timestamp is still kept in
-`~/.local/state/omarchy/cameras-last-event`, but only to bound the query
-window. The first reply after the shell starts, or after alerts are armed,
-records what Frigate already knows and shows nothing — so neither a restart nor
-a car that has been parked in frame since this morning turns into an alert.
-
-### The viewer window
-
-It is a plain floating `mpv`, which Omarchy already centers at 875x600. Press
-**f** for fullscreen and **q** to close — mpv's own bindings, spelled out in a
-line of OSD text when the window opens.
-
-Not fullscreen from the start, on purpose: Omarchy's rule for class `mpv` and
-mpv's own `--fs` fight each other, and every change in the video stream
-re-triggers the fight, so the window flips back to fullscreen whenever
-something moves in frame.
-
-For a window parked in a corner instead of centered, add a rule of your own —
-the viewer titles its windows `omarchy-cameras: <name>`:
-
-```lua
--- ~/.config/hypr/apps/cameras.lua
-o.window({ class = "mpv", title = "^omarchy-cameras:" }, {
-  float = true,
-  size = { 640, 360 },
-  move = { "(monitor_w-680)", 60 },
-})
+```bash
+rm -f ~/.config/omarchy/cameras.json
+rm -f ~/.local/state/omarchy/cameras-last-event
+secret-tool clear service omarchy-cameras
 ```
 
-## Configuration
+Removing the plugin never touches Frigate or the cameras themselves.
 
-`~/.config/omarchy/cameras.json` holds everything camera-related.
+## Configuration file
+
+`~/.config/omarchy/cameras.json` holds everything the config screen writes. It
+is watched, so hand edits apply without a restart.
 
 ```json
 {
   "sources": { "frigate": true, "onvif": false },
-  "frigate": {
-    "url": "http://nvr.lan:5000",
-    "rtspPort": 8554,
-    "user": ""
-  },
-  "notifyLabels": ["person"],
+  "frigate": { "url": "http://nvr.lan:5000", "rtspPort": 8554, "user": "" },
   "alerts": {
     "enabled": false,
     "labels": ["person"],
     "monitor": "",
     "position": "top-center",
     "durationSec": 12,
-    "width": 320
+    "width": 320,
+    "useMqtt": false
   },
   "onvif": []
 }
 ```
 
-- `frigate.url` — leave empty to run ONVIF-only. Cameras come from
-  `/api/config`; disabled ones are skipped.
-- `frigate.user` — set only when Frigate requires a login; the password lives
-  in the keyring. See "If Frigate requires a login" above.
-- `frigate.rtspPort` — fallback only, and not a setting in the UI. The real
-  port is read back out of Frigate's own camera inputs: a restreamed camera
-  pulls from `rtsp://127.0.0.1:<port>/<name>`, so the number is already in
-  `/api/config`.
-- `sources` — which of `frigate` and `onvif` are switched on. A config written
-  before this existed migrates from what it already has: a Frigate URL means
-  Frigate, saved cameras mean ONVIF.
-- `onvif[]` — written by **Search the network** in Config, which asks the local
-  network over WS-Discovery and then reads each camera's RTSP address over
-  ONVIF. Hand-editing is fine:
-  `{"name": …, "rtsp": …, "user": …, "ptz": true|false, "xaddr": …}`.
-  ONVIF passwords go to the keyring under `key=onvif-<host>`.
-- `alerts` — see Motion alerts above. `monitor` is a connector name as the
-  compositor reports it (`DP-1`, `HDMI-A-1`); empty means the first screen.
-  `labels` falls back to `notifyLabels` when it is absent or empty.
+`frigate.rtspPort` is only a fallback: the real port is read out of Frigate's
+own camera inputs. `alerts.monitor` is a connector name as the compositor
+reports it (`DP-1`, `HDMI-A-1`); empty means the first screen. `onvif[]` is
+written by the config screen, but hand-editing is fine —
+`{"name": …, "rtsp": …, "user": …, "ptz": true|false, "xaddr": …}`.
 
-The file is watched, so edits apply without a restart.
+Grid columns and thumbnail refresh live on the bar widget entry in
+`~/.config/omarchy/shell.json`, or in Setup > Plugins.
 
-Display preferences live on the bar widget entry in
-`~/.config/omarchy/shell.json` (or in Setup > Plugins):
+## How it works
 
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `columns` | 2 | grid columns in the popup |
-| `thumbIntervalMs` | 2000 | thumbnail refresh, only while the popup is open |
+Wayland has no window embedding, so either the pixels are produced inside the
+`omarchy-shell` process or the video is a separate window. The plugin uses each
+where it fits: thumbnails are JPEGs refreshed inside the shell, and the focused
+view is a floating mpv window. Nobody watches nine streams at once, and
+decoding nine of them to fill 170px tiles would spend a lot of CPU on pictures
+too small to read.
 
-Credentials never go in either file — see below.
+Frigate cameras play the go2rtc restream where one exists and Frigate's MJPEG
+endpoint otherwise, because asking for a restream that is not there just yields
+a dead window. ONVIF cameras play their own RTSP stream, and their thumbnails
+come from one ffmpeg per visible camera: ONVIF does define a snapshot endpoint,
+but cameras that advertise one and then refuse every request are common enough
+that it cannot be relied on.
 
-## Usage
-
-Click the CCTV icon in the bar for the grid; click a tile (or select it with
-the arrow keys and press Enter) to open that camera fullscreen. `r` refreshes.
-
-Over IPC, for keybinds:
-
-```bash
-omarchy-shell shell toggle avila.cameras '{}'   # grid, on the focused monitor
-omarchy-shell avila.cameras view garagem        # straight to one camera
-omarchy-shell avila.cameras alerts on           # or off; "" just reports
-omarchy-shell avila.cameras mqtt on             # or off; "" reports broker state
-                                                # and the last alert's latency
-omarchy-shell avila.cameras showPlacement       # rehearse the alert position
-omarchy-shell avila.cameras status
-```
-
-The `shell toggle` form is the one to bind: it picks the bar copy on the
-focused monitor, whereas `avila.cameras open` acts on whichever copy owns the
-IPC target.
+Searching for ONVIF cameras probes every address on the local subnet as well as
+the multicast group. The multicast reply arrives with no matching outbound
+flow, so a default-deny firewall drops it and many Wi-Fi access points never
+forward it between clients; a direct probe is an ordinary tracked exchange.
 
 ## Development
 
-`omarchy plugin add` clones from git, which is awkward while writing the
+`omarchy plugin add` clones from git, which is awkward while working on the
 plugin. Symlink the checkout instead:
 
 ```bash
-ln -s ~/orca/omarchy_cameras ~/.config/omarchy/plugins/avila.cameras
-omarchy plugin validate ~/orca/omarchy_cameras
+ln -s ~/src/omarchy_cameras ~/.config/omarchy/plugins/avila.cameras
+omarchy plugin validate ~/src/omarchy_cameras
 omarchy-shell shell rescanPlugins
 omarchy plugin enable avila.cameras
 ```
 
-The scanner follows the symlink, but **its file watcher does not** — neither
-saving a file nor `rescanPlugins` picks up an edit through it. Run
-`omarchy restart shell` after each change. (A plugin installed normally, as a
-real directory, hot-reloads on save.)
-
-Checks:
+Editing QML does not update the running widget, symlinked or not. Run
+`omarchy restart shell` after each change.
 
 ```bash
-node test_cameras.js   # camera-list parsing, stream selection, merging
-python3 test_onvif.py  # WS-Security digest, SOAP parsing, credential handling
+node test_cameras.js   # camera lists, stream selection, event filtering
+python3 test_mqtt.py   # MQTT packet framing and event payloads
+python3 test_onvif.py  # WS-Security digest, SOAP parsing, credentials
 ```
 
-Plugin load failures surface as `console.warn` from the shell's
-`PluginRegistry`:
+`omarchy-shell avila.cameras status` reports what the plugin currently sees;
+`mqtt ""` and `discovery` do the same for the broker and the last search.
 
-```bash
-quickshell log -p $OMARCHY_PATH/shell -t 200 | grep -i avila
-```
+## Security and license
 
-## Files
+Passwords are never written to `cameras.json`. Frigate, MQTT and per-camera
+ONVIF passwords go to the system keyring under `service=omarchy-cameras`, and
+reach the helper scripts over stdin rather than argv, which any process on the
+machine can read. An RTSP credential is spliced in only when mpv launches.
 
-| Path | Role |
-|------|------|
-| `Service.qml` | camera registry and every write to cameras.json; one instance per shell, shared by every monitor's bar |
-| `Panel.qml` | bar widget, popup grid, and the config form |
-| `CameraThumb.qml` | double-buffered thumbnail; swaps frames only once the next one has loaded, so a polled JPEG does not blink |
-| `Alert.qml` | the motion-alert window, owned by the service: a column of cards, oldest on top |
-| `AlertCard.qml` | one preview card, also used for the placement rehearsal |
-| `Cameras.js` | source merging, stream selection, event filtering, URL building — pure functions, no QML |
-| `bin/omarchy-cameras-frigate` | authenticated Frigate access: login, one-shot fetch, and the thumbnail mirror |
-| `bin/omarchy-cameras-thumbd` | one ffmpeg per ONVIF camera, writing a rolling thumbnail |
-| `bin/omarchy-cameras-mqtt` | stdlib MQTT 3.1.1 subscriber; one JSON line per detection |
-| `bin/omarchy-cameras-onvif` | WS-Discovery, stream lookup, keyring — stdlib Python |
-| `bin/omarchy-cameras-view` | the mpv launcher |
+MIT licensed.
