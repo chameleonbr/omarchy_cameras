@@ -221,14 +221,17 @@ Item {
       ? "No ONVIF cameras answered on this network" : ""
   }
 
-  // Ask one discovered device for its stream URL and add it to the config.
+  // Ask one device for its stream URL and add it to the config. `target` is
+  // either an xaddr from discovery or an address the user typed — the script
+  // resolves a bare address by trying the usual ONVIF ports.
+  //
   // The password goes over stdin, never argv.
-  function probeDevice(xaddr, user, password) {
+  function probeDevice(target, user, password) {
     if (probing) return
-    probing = xaddr
+    probing = target
     probeError = ""
     probeProcess.secret = password
-    probeProcess.command = [onvifScript, "probe", xaddr, "--user", user]
+    probeProcess.command = [onvifScript, "probe", target, "--user", user]
     probeProcess.running = true
     probeWatchdog.restart()
   }
@@ -537,10 +540,11 @@ Item {
 
   // A process that never starts — a missing or non-executable script — emits
   // neither exited nor streamFinished, and the button would spin forever.
-  // Discovery itself is bounded at 3s inside the script.
+  // Generous, because discovery sweeps the subnet host by host: ~12s on a /24,
+  // and firing before that would report a working search as broken.
   Timer {
     id: discoverWatchdog
-    interval: 10000
+    interval: 45000
     onTriggered: {
       root.discovering = false
       root.discoverError = "Discovery did not finish — is bin/omarchy-cameras-onvif executable?"

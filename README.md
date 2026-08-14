@@ -95,6 +95,30 @@ omarchy-shell avila.cameras setFrigate http://nvr.lan:5000 admin
 `setFrigate` deliberately takes no password — it would end up in shell history
 and in the process's argv.
 
+### Finding ONVIF cameras
+
+**Search the network** sends a WS-Discovery Probe to the multicast group and,
+because that alone finds nothing on most setups, also one directly to every
+address on the local subnet. About twelve seconds for a /24.
+
+The unicast sweep is what makes it work. A multicast reply arrives as an
+inbound packet with no matching outbound flow, so a default-deny firewall drops
+it — `ufw` does, out of the box — and plenty of Wi-Fi access points never
+forward the multicast between clients either. A unicast probe is an ordinary
+tracked exchange, and every camera that answers the group answers it too.
+
+**Add one by address** covers the rest: type `192.168.1.64`, or
+`192.168.1.64:2020` if you know the port. The port is worth not guessing —
+six cameras on one network here answered on 80, 2020, 8000, 8899 and 10000.
+
+Either way, adding a camera reads its RTSP URL over ONVIF with the credentials
+from the form, so the address never has to be typed. The password goes to the
+keyring under `key=onvif-<host>` and is spliced back in when mpv launches.
+
+Cameras added this way show a placeholder instead of a thumbnail: ONVIF has no
+snapshot endpoint, so there is nothing to poll the way Frigate's `latest.jpg`
+is polled. Opening one plays normally.
+
 ### Which stream a camera plays
 
 Frigate only restreams the cameras listed under `go2rtc:` in its own config.
@@ -230,7 +254,7 @@ o.window({ class = "mpv", title = "^omarchy-cameras:" }, {
 - `sources` — which of `frigate` and `onvif` are switched on. A config written
   before this existed migrates from what it already has: a Frigate URL means
   Frigate, saved cameras mean ONVIF.
-- `onvif[]` — written by **Find cameras** in Config, which asks the local
+- `onvif[]` — written by **Search the network** in Config, which asks the local
   network over WS-Discovery and then reads each camera's RTSP address over
   ONVIF. Hand-editing is fine:
   `{"name": …, "rtsp": …, "user": …, "ptz": true|false, "xaddr": …}`.

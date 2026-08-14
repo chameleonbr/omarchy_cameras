@@ -6,7 +6,8 @@ and a generated client would pull in a dependency tree to build the same
 three. Prints JSON on stdout, which the QML side reads off a Process.
 
   omarchy-cameras-onvif discover [--timeout 3]
-  omarchy-cameras-onvif probe <xaddr> [--user admin]     # password on stdin
+  omarchy-cameras-onvif find <host[:port]>
+  omarchy-cameras-onvif probe <host[:port]|xaddr> [--user admin]  # pw on stdin
   omarchy-cameras-onvif stream-url <rtsp> [--user admin]
 
 `probe` stashes the password in the session keyring under
@@ -18,12 +19,15 @@ address without the password ever being written down.
 
 import argparse
 import base64
+import concurrent.futures
 import hashlib
+import ipaddress
 import json
 import os
 import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -167,39 +171,164 @@ def parse_probe_matches(payload):
     return devices
 
 
-def discover(timeout):
-    """WS-Discovery probe on the local segment.
+def local_networks():
+    """IPv4 subnets this machine sits on, as (network, own address) pairs.
 
-    ponytail: one socket on the default route. A host bridged onto several
-    camera VLANs needs one send per interface; add that when a setup that
-    needs it shows up.
+    /24 or smaller only: sweeping a /16 would be 65k probes, and a camera on
+    one is a problem for the address field, not for discovery.
+    """
+    out = []
+    try:
+        raw = subprocess.run(["ip", "-j", "-4", "addr"],
+                             capture_output=True, check=False, timeout=5).stdout
+        interfaces = json.loads(raw or b"[]")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return out
+
+    for interface in interfaces:
+        if "LOOPBACK" in interface.get("flags", []):
+            continue
+        for address in interface.get("addr_info", []):
+            if address.get("family") != "inet" or address.get("prefixlen", 0) < 24:
+                continue
+            try:
+                network = ipaddress.ip_network(
+                    "%s/%d" % (address["local"], address["prefixlen"]), strict=False)
+            except ValueError:
+                continue
+            out.append((network, address["local"]))
+    return out
+
+
+def unicast_probe(host, attempts=2, timeout=1.2):
+    """One WS-Discovery Probe straight at a host, rather than to the group.
+
+    This is the path that actually works. The multicast reply arrives as an
+    inbound packet with no matching outbound flow, so a default-deny firewall
+    drops it — ufw does, out of the box — and plenty of Wi-Fi access points
+    never forward the multicast in the first place. A unicast probe is an
+    ordinary tracked exchange, and every camera that answers the group answers
+    this too.
+
+    One socket per host on purpose: a shared socket collects ICMP
+    port-unreachable errors from every dead address and reports them on later
+    sends, which silently skipped a third of the range.
     """
     message = PROBE_TEMPLATE.format(message_id=uuid.uuid4(), discovery=WSDL_DISCOVERY)
+    for _ in range(attempts):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        try:
+            sock.sendto(message.encode(), (host, 3702))
+            payload, _ = sock.recvfrom(65535)
+            if b"ProbeMatch" in payload:
+                return payload
+        except OSError:
+            pass
+        finally:
+            sock.close()
+    return None
 
+
+def multicast_probe(timeout):
+    """The textbook probe. Kept because it costs one packet and answers
+    instantly on a wired network with no firewall in the way."""
+    message = PROBE_TEMPLATE.format(message_id=uuid.uuid4(), discovery=WSDL_DISCOVERY)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
     sock.settimeout(0.5)
+    payloads = []
     try:
         sock.sendto(message.encode(), ("239.255.255.250", 3702))
-        deadline = timeout
-        found = {}
-        while deadline > 0:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             try:
                 payload, _ = sock.recvfrom(65535)
-            except socket.timeout:
-                deadline -= 0.5
+            except OSError:
                 continue
-            for device in parse_probe_matches(payload):
-                # Cameras answer a probe more than once; the xaddr is what
-                # every later call is keyed on, so dedupe on it.
-                found.setdefault(device["xaddr"], device)
-        return sorted(found.values(), key=lambda d: d["name"].lower())
+            payloads.append(payload)
+    except OSError:
+        pass
     finally:
         sock.close()
+    return payloads
+
+
+def discover(timeout, workers=64):
+    found = {}
+
+    def collect(payload):
+        for device in parse_probe_matches(payload):
+            # Cameras answer a probe more than once; the xaddr is what every
+            # later call is keyed on, so dedupe on it.
+            found.setdefault(device["xaddr"], device)
+
+    for payload in multicast_probe(timeout):
+        collect(payload)
+
+    hosts = []
+    for network, own in local_networks():
+        hosts += [str(h) for h in network.hosts() if str(h) != own]
+
+    if hosts:
+        with concurrent.futures.ThreadPoolExecutor(workers) as pool:
+            for payload in pool.map(unicast_probe, hosts):
+                if payload:
+                    collect(payload)
+
+    return sorted(found.values(), key=lambda d: d["name"].lower())
 
 
 # ----------------------------------------------------------------- probe
+
+                                          # ports/paths seen in the wild, most
+                                          # likely first
+# Every one of these was the answer on some camera on one home network.
+DEVICE_PORTS = (80, 8000, 2020, 8899, 10000, 8080, 5000)
+DEVICE_PATHS = ("/onvif/device_service", "/onvif/device")
+
+# The unauthenticated call every ONVIF device answers, used purely to confirm
+# that an address really is a device service.
+HELLO = ('<tds:GetSystemDateAndTime '
+         'xmlns:tds="http://www.onvif.org/ver10/device/wsdl"/>')
+
+
+def resolve_service(target, timeout=2):
+    """Turn `192.168.1.64`, `192.168.1.64:2020` or a full URL into the device
+    service URL, by asking the likely ports until one answers as ONVIF.
+
+    WS-Discovery is multicast, and plenty of networks — most Wi-Fi access
+    points among them — never forward it between clients. Being able to name a
+    camera by address is what makes ONVIF usable on those, and it also finds
+    the port rather than assuming 80: of three cameras on one network here, one
+    answered on 2020 and two on 80.
+    """
+    if target.startswith("http://") or target.startswith("https://"):
+        return target if probe_service(target, timeout) else ""
+
+    host, _, port = target.partition(":")
+    ports = [int(port)] if port.isdigit() else list(DEVICE_PORTS)
+    for candidate_port in ports:
+        for path in DEVICE_PATHS:
+            url = "http://%s:%d%s" % (host, candidate_port, path)
+            if probe_service(url, timeout):
+                return url
+    return ""
+
+
+def probe_service(url, timeout=2):
+    try:
+        root = soap_call(url, HELLO, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        # GetSystemDateAndTime is meant to be unauthenticated, but a camera
+        # that demands credentials for it has still identified itself as an
+        # ONVIF endpoint — which is all this is asking.
+        return error.code in (401, 403)
+    except (urllib.error.URLError, OSError, ET.ParseError):
+        return False
+    return find_first(root, "GetSystemDateAndTimeResponse") is not None
+
 
 def service_xaddrs(root):
     """Media and PTZ endpoints out of a GetCapabilities response."""
@@ -262,7 +391,11 @@ def store_secret(host, password):
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def probe(xaddr, user, password):
+def probe(target, user, password):
+    xaddr = resolve_service(target)
+    if not xaddr:
+        raise RuntimeError("no ONVIF service answered at " + target)
+
     media_ns = 'xmlns:trt="http://www.onvif.org/ver10/media/wsdl"'
     schema_ns = 'xmlns:tt="http://www.onvif.org/ver10/schema"'
 
@@ -326,11 +459,16 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
 
     discover_cmd = commands.add_parser("discover")
-    discover_cmd.add_argument("--timeout", type=float, default=3.0)
+    discover_cmd.add_argument("--timeout", type=float, default=2.0)
 
     probe_cmd = commands.add_parser("probe")
-    probe_cmd.add_argument("xaddr")
+    # Either a device-service URL from discovery, or a plain address the user
+    # typed: 192.168.1.64, or 192.168.1.64:2020.
+    probe_cmd.add_argument("target")
     probe_cmd.add_argument("--user", default="")
+
+    find_cmd = commands.add_parser("find")
+    find_cmd.add_argument("target")
 
     url_cmd = commands.add_parser("stream-url")
     url_cmd.add_argument("rtsp")
@@ -343,6 +481,14 @@ def main(argv=None):
         sys.stdout.write("\n")
         return 0
 
+    if args.command == "find":
+        xaddr = resolve_service(args.target)
+        json.dump({"xaddr": xaddr} if xaddr
+                  else {"error": "no ONVIF service answered at " + args.target},
+                  sys.stdout)
+        sys.stdout.write("\n")
+        return 0 if xaddr else 1
+
     if args.command == "stream-url":
         host = urllib.parse.urlsplit(args.rtsp).hostname or ""
         print(with_credentials(args.rtsp, args.user, lookup_secret(host)))
@@ -352,7 +498,7 @@ def main(argv=None):
     # other process on the machine could read it out of /proc.
     password = sys.stdin.readline().strip() if not sys.stdin.isatty() else ""
     try:
-        json.dump({"camera": probe(args.xaddr, args.user, password)}, sys.stdout)
+        json.dump({"camera": probe(args.target, args.user, password)}, sys.stdout)
     except Exception as error:  # noqa: BLE001 - the UI shows whatever went wrong
         json.dump({"error": str(error)}, sys.stdout)
         sys.stdout.write("\n")

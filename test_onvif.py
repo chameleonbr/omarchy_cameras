@@ -115,4 +115,46 @@ assert (onvif.with_credentials("rtsp://192.168.1.64/s1", "admin", "")
 assert (onvif.with_credentials("rtsp://192.168.1.64/s1", "", "pw")
         == "rtsp://192.168.1.64/s1"), "no user means the URL is left alone"
 
+# --- resolving a typed address ------------------------------------------------
+#
+# WS-Discovery is multicast and most Wi-Fi access points drop it between
+# clients, so naming a camera by address is the path that actually works there.
+# The port is not knowable in advance either: of three cameras on one network,
+# one answered on 2020 and two on 80.
+
+assert onvif.DEVICE_PORTS[0] == 80, "cheapest guess first"
+for port in (80, 8000, 2020):
+    assert port in onvif.DEVICE_PORTS, port
+assert "/onvif/device_service" in onvif.DEVICE_PATHS
+
+calls = []
+
+
+def fake_probe(url, timeout=2):
+    calls.append(url)
+    return url == "http://10.0.0.9:2020/onvif/device_service"
+
+
+real_probe, onvif.probe_service = onvif.probe_service, fake_probe
+try:
+    assert onvif.resolve_service("10.0.0.9") == "http://10.0.0.9:2020/onvif/device_service"
+    assert calls[0] == "http://10.0.0.9:80/onvif/device_service", "tries 80 first"
+
+    # An explicit port is an instruction, not a hint: do not scan past it.
+    calls.clear()
+    assert onvif.resolve_service("10.0.0.9:2020") == "http://10.0.0.9:2020/onvif/device_service"
+    assert all(":2020" in c for c in calls), calls
+
+    # A full URL is taken as given, and still verified.
+    calls.clear()
+    assert onvif.resolve_service("http://10.0.0.9:2020/onvif/device_service")
+    assert calls == ["http://10.0.0.9:2020/onvif/device_service"]
+    assert onvif.resolve_service("http://10.0.0.9/nope") == ""
+
+    calls.clear()
+    assert onvif.resolve_service("10.0.0.250") == "", "nothing answering is not an error"
+    assert len(calls) == len(onvif.DEVICE_PORTS) * len(onvif.DEVICE_PATHS)
+finally:
+    onvif.probe_service = real_probe
+
 print("ok")

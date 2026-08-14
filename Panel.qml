@@ -328,6 +328,7 @@ Panel {
         || durationField.activeFocus || alertWidthField.activeFocus
         || mqttPasswordField.activeFocus
         || onvifUserField.activeFocus || onvifPasswordField.activeFocus
+        || onvifHostField.activeFocus
       onMoveRequested: function(dx, dy) {
         if (root.view === "config") return
         if (!root.cursorActive) { root.cursorActive = true; return }
@@ -857,7 +858,7 @@ Panel {
 
                 TextField {
                   id: onvifPasswordField
-                  KeyNavigation.tab: urlField
+                  KeyNavigation.tab: onvifHostField
                   KeyNavigation.backtab: onvifUserField
                   width: (parent.width - Style.space(8)) / 2
                   placeholderText: "password"
@@ -866,10 +867,46 @@ Panel {
                 }
               }
 
+              FieldLabel { text: "Add one by address" }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                TextField {
+                  id: onvifHostField
+                  KeyNavigation.tab: urlField
+                  KeyNavigation.backtab: onvifPasswordField
+                  width: parent.width - onvifAdd.width - Style.space(8)
+                  placeholderText: "192.168.1.64"
+                  foreground: root.foreground
+                  onAccepted: onvifAdd.clicked()
+                }
+
+                Button {
+                  id: onvifAdd
+                  // Both are empty on a fresh screen, so an equality test
+                  // alone would leave the button reading "Adding…" forever.
+                  text: root.service && onvifHostField.text !== ""
+                    && root.service.probing === onvifHostField.text
+                    ? "Adding…" : "Add"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  enabled: root.service && root.service.probing === ""
+                    && onvifHostField.text !== ""
+                  opacity: enabled ? 1 : 0.5
+                  onClicked: if (root.service) {
+                    root.service.probeDevice(onvifHostField.text,
+                      onvifUserField.text, onvifPasswordField.text)
+                  }
+                }
+              }
+
               Actions {
                 Button {
                   text: root.service && root.service.discovering
-                    ? "Searching…" : "Find cameras"
+                    ? "Searching…" : "Search the network"
                   bordered: true
                   foreground: root.foreground
                   fontFamily: root.fontFamily
@@ -942,9 +979,10 @@ Panel {
               }
 
               Hint {
-                text: "Search asks the local network over WS-Discovery. Adding a "
-                  + "camera reads its RTSP address over ONVIF, so the address "
-                  + "never has to be typed by hand."
+                text: "Adding by address reads the camera's RTSP URL over "
+                  + "ONVIF, finding the port itself. Search uses WS-Discovery, "
+                  + "which many Wi-Fi access points drop between clients — if "
+                  + "it turns up nothing, type the address instead."
               }
 
               FieldLabel {
