@@ -163,8 +163,12 @@ seconds on screen, and preview width.
 
 Arming and disarming has two shortcuts that skip the form: the **Detection
 on/off** button beside Config, and **middle-clicking the bar icon**. While
-armed the bar icon is highlighted; switched off it goes back to the ordinary
-bar color, so a glance tells you whether windows can appear on their own.
+armed the bar icon takes the theme's accent color; switched off it goes back to
+the ordinary bar color, so a glance tells you whether windows can appear on
+their own.
+
+Not the usual `bar.active` red, which themes reserve for recording and pending
+updates: armed alerts are a normal working state, not something wrong.
 
 Changing the monitor, corner or width rehearses the placement: a black
 rectangle appears for 5s exactly where alerts will, so you can see the spot

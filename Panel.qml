@@ -280,7 +280,13 @@ Panel {
     // Alerts on is the state worth marking: it is the one that makes windows
     // appear on their own, and the user needs to see at a glance that it is
     // armed.
+    //
+    // The kit paints `active` with bar.active, which themes set to their red —
+    // the colour Omarchy uses for recording and pending updates. Armed alerts
+    // are a normal working state, not something wrong, so this takes the
+    // theme's accent instead. Still the palette, still follows a theme change.
     active: root.alertsOn
+    activeColor: root.accent
     tooltipText: (root.hasCameras
       ? root.cameras.length + (root.cameras.length === 1 ? " camera" : " cameras")
       : "No cameras configured")
