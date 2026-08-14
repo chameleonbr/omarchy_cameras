@@ -573,8 +573,8 @@ Item {
   // Long-running: keeps the visible cameras' JPEGs fresh on disk until stopped.
   Process { id: mirrorProcess }
 
-  // secret-tool reads the password on stdin, so it never lands in argv where
-  // any process on the machine could read it out of /proc.
+  // The password goes over stdin, never argv, where any process on the machine
+  // could read it out of /proc. Same EOF requirement as above.
   Process {
     id: storePasswordProcess
     property string secret: ""
@@ -582,6 +582,7 @@ Item {
     onStarted: {
       write(secret + "\n")
       secret = ""
+      stdinEnabled = false
     }
   }
 
@@ -632,6 +633,9 @@ Item {
     onTriggered: if (root.mqttWanted && !mqttProcess.running) mqttProcess.running = true
   }
 
+  // secret-tool reads the password from stdin and waits for EOF, so stdin has
+  // to be closed after writing or the process hangs forever and onExited never
+  // fires. Setting stdinEnabled false is how Quickshell closes the pipe.
   Process {
     id: mqttPasswordProcess
     property string secret: ""
@@ -639,6 +643,7 @@ Item {
     onStarted: {
       write(secret + "\n")
       secret = ""
+      stdinEnabled = false
     }
     onExited: function(code) {
       if (code === 0) root.reconnectMqtt()

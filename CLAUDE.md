@@ -202,6 +202,18 @@ detection; the Service parses `[{...}]` lines through the same `applyEvents` as
 HTTP. HTTP polling keeps running while `mqttConnected` is false, so a bad
 password degrades latency rather than losing alerts.
 
+**`secret-tool store` waits for stdin EOF.** Quickshell's `Process.write()`
+does not close the pipe, so the process hangs forever, `onExited` never fires,
+and the password is never stored — the Connect button looked like it did
+nothing. Set `stdinEnabled = false` right after writing. (The ONVIF probe
+escapes this because Python's `readline()` returns on the newline.)
+
+**Tab does not walk the config form by itself.** `PanelKeyCatcher` claims Tab
+for `switchPanel`, and even while `blocked` the focus chain leaves the panel
+entirely. Every `TextField` in the form is wired with explicit
+`KeyNavigation.tab` / `backtab`; add new fields to that ring, and to the
+`blocked:` expression, or they will be unusable from the keyboard.
+
 **Do not bind `Process.running` for a process that exits on its own.** The exit
 writes `running`, which breaks the binding, so it never restarts. And do not
 give the retry `Timer` `triggeredOnStart` — a refused MQTT connection dies in

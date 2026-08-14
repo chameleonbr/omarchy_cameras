@@ -476,6 +476,8 @@ Panel {
 
             TextField {
               id: urlField
+              KeyNavigation.tab: frigateUserField
+              KeyNavigation.backtab: mqttPasswordField
               width: parent.width
               placeholderText: "http://nvr.lan:5000"
               foreground: root.foreground
@@ -490,6 +492,8 @@ Panel {
 
               TextField {
                 id: frigateUserField
+                KeyNavigation.tab: frigatePasswordField
+                KeyNavigation.backtab: urlField
                 width: (parent.width - Style.space(8)) / 2
                 placeholderText: "user"
                 foreground: root.foreground
@@ -498,6 +502,8 @@ Panel {
 
               TextField {
                 id: frigatePasswordField
+                KeyNavigation.tab: durationField
+                KeyNavigation.backtab: frigateUserField
                 width: (parent.width - Style.space(8)) / 2
                 placeholderText: "password"
                 password: true
@@ -583,6 +589,8 @@ Panel {
                   FieldLabel { text: "Seconds on screen" }
                   TextField {
                     id: durationField
+                    KeyNavigation.tab: alertWidthField
+                    KeyNavigation.backtab: frigatePasswordField
                     width: Style.space(100)
                     placeholderText: "12"
                     foreground: root.foreground
@@ -597,6 +605,8 @@ Panel {
                   FieldLabel { text: "Preview width" }
                   TextField {
                     id: alertWidthField
+                    KeyNavigation.tab: mqttPasswordField
+                    KeyNavigation.backtab: durationField
                     width: Style.space(100)
                     placeholderText: "320"
                     foreground: root.foreground
@@ -678,6 +688,8 @@ Panel {
 
                 TextField {
                   id: mqttPasswordField
+                  KeyNavigation.tab: urlField
+                  KeyNavigation.backtab: alertWidthField
                   width: parent.width - mqttSave.width - Style.space(8)
                   placeholderText: "password"
                   password: true
