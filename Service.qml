@@ -57,6 +57,19 @@ Item {
     return ["curl", "-fsS", "--max-time", "10", config.frigate.url + path]
   }
 
+  // ------------------------------------------------------- dependencies
+
+  // A missing binary makes Process fail to start, which shows up nowhere but
+  // a shell warning — so check once and let the config screen say so.
+  property var missingTools: []
+  readonly property string missingToolsText: Cameras.describeMissingTools(missingTools)
+
+  function checkTools() {
+    if (toolCheckProcess.running) return
+    toolCheckProcess.command = Cameras.toolCheckCommand()
+    toolCheckProcess.running = true
+  }
+
   function scriptPath(relative) {
     return decodeURIComponent(
       String(Qt.resolvedUrl(relative)).replace(/^file:\/\//, ""))
@@ -575,6 +588,17 @@ Item {
     onRunningChanged: if (running) root.eventsSynced = false
     onTriggered: root.pollEvents()
   }
+
+  Process {
+    id: toolCheckProcess
+    stdout: StdioCollector {
+      id: toolCheckStdout
+      waitForEnd: true
+      onStreamFinished: root.missingTools = Cameras.parseMissingTools(toolCheckStdout.text)
+    }
+  }
+
+  Component.onCompleted: checkTools()
 
   // Long-running: keeps the visible cameras' JPEGs fresh on disk until stopped.
   Process { id: mirrorProcess }

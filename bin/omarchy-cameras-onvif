@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """ONVIF discovery and stream lookup for the Omarchy cameras plugin.
 
 Standard library only: the three SOAP envelopes this needs are fixed strings,

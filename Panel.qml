@@ -486,6 +486,19 @@ Panel {
             // from all four fields, keeps the panel dismissable while typing.
             Keys.onEscapePressed: root.close()
 
+            // Above everything, because a missing binary is not a setting to
+            // adjust but the reason nothing below it will work.
+            Text {
+              width: parent.width
+              visible: text !== ""
+              wrapMode: Text.WordWrap
+              text: root.service ? root.service.missingToolsText : ""
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+
             PanelSectionHeader {
               text: "Frigate"
               foreground: root.foreground

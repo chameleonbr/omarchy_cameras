@@ -21,6 +21,57 @@ var DEFAULT_CONFIG = {
 
 var ALERT_POSITIONS = ["top-left", "top-center", "top-right"]
 
+// Every external command the plugin shells out to, and what stops working
+// without it. Omarchy ships mpv, jq and libsecret; curl and python3 arrive as
+// dependencies of other packages rather than in its own lists, so a lean
+// install can genuinely be missing them — and a missing binary makes Process
+// fail to start, which is silent apart from a shell warning.
+var REQUIRED_TOOLS = [
+  { name: "curl", need: "reading anything from Frigate" },
+  { name: "mpv", need: "opening a camera" },
+  { name: "jq", need: "logging in to an authenticated Frigate" },
+  { name: "secret-tool", need: "storing passwords" },
+  { name: "python3", need: "MQTT alerts and ONVIF discovery" }
+]
+
+// One shell command that prints the name of each tool that is not on PATH.
+// Cheaper and more honest than testing paths from QML, which does not know
+// what PATH the shell was started with.
+function toolCheckCommand() {
+  var names = REQUIRED_TOOLS.map(function(t) { return t.name }).join(" ")
+  return ["bash", "-c",
+    'for c in ' + names + '; do command -v "$c" >/dev/null 2>&1 || echo "$c"; done']
+}
+
+function parseMissingTools(raw) {
+  var known = {}
+  for (var i = 0; i < REQUIRED_TOOLS.length; i++) known[REQUIRED_TOOLS[i].name] = true
+  var out = []
+  var lines = String(raw || "").split("\n")
+  for (var j = 0; j < lines.length; j++) {
+    var name = lines[j].trim()
+    // Only report names we asked about: a shell that prints a warning of its
+    // own must not turn into a fake missing dependency.
+    if (known[name] && out.indexOf(name) === -1) out.push(name)
+  }
+  return out
+}
+
+// "curl (reading anything from Frigate)" — the tool alone is not actionable
+// enough to tell someone why they should care.
+function describeMissingTools(missing) {
+  if (!missing || missing.length === 0) return ""
+  var byName = {}
+  for (var i = 0; i < REQUIRED_TOOLS.length; i++) {
+    byName[REQUIRED_TOOLS[i].name] = REQUIRED_TOOLS[i].need
+  }
+  var parts = missing.map(function(name) {
+    return byName[name] ? name + " (" + byName[name] + ")" : name
+  })
+  return (missing.length === 1 ? "Missing command: " : "Missing commands: ")
+    + parts.join(", ")
+}
+
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }

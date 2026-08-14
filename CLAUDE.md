@@ -179,6 +179,18 @@ comes back through `onLoaded` and rebuilds the camera list. Never write it from
 binding straight to the config rewrites what the user is typing on every
 reload.
 
+**Every external command belongs in `Cameras.REQUIRED_TOOLS`.** A missing
+binary makes `Process` fail to start, which emits no signal the plugin can see
+— no `exited`, no `streamFinished` — so the only symptom is a feature that
+does nothing. The startup check spawns one shell that reports which of them
+are off PATH, and the config screen shows the list. Add to that table whenever
+a new command is introduced; the test asserts the check covers every entry.
+
+The Python scripts use `#!/usr/bin/python3`, not `env python3`, on purpose: a
+version manager on PATH (mise here) would otherwise decide which interpreter a
+desktop plugin runs, and removing that install would break MQTT and ONVIF.
+Everything they use is stdlib, so the system interpreter is always enough.
+
 ## Frigate specifics
 
 Only cameras listed under `go2rtc:` in Frigate's config have an RTSP restream.

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Stream Frigate detections from MQTT, one JSON line per new event.
 
     omarchy-cameras-mqtt <host> <port> <topic-prefix> [--user avila]

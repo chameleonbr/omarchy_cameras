@@ -151,6 +151,32 @@ assert.equal(
     ["person"], {}).events[0].hasSnapshot,
   true)
 
+// --- dependency check ------------------------------------------------------
+//
+// A missing binary makes Process fail to start, which is invisible apart from
+// a shell warning, so the config screen has to say it out loud.
+
+assert.deepEqual(parseMissingTools(""), [], "nothing missing is the normal case")
+assert.deepEqual(parseMissingTools("curl\npython3\n"), ["curl", "python3"])
+assert.deepEqual(parseMissingTools("  mpv  \n\n"), ["mpv"], "whitespace tolerated")
+assert.deepEqual(parseMissingTools("curl\ncurl\n"), ["curl"], "no duplicates")
+assert.deepEqual(parseMissingTools("bash: line 1: warning\n"), [],
+  "a shell's own chatter must not become a fake missing dependency")
+
+assert.equal(describeMissingTools([]), "")
+assert.equal(describeMissingTools(["mpv"]), "Missing command: mpv (opening a camera)")
+assert.match(describeMissingTools(["curl", "jq"]), /^Missing commands: curl \(.+\), jq \(.+\)$/)
+assert.equal(describeMissingTools(["nonsense"]), "Missing command: nonsense",
+  "an unknown name still gets reported rather than swallowed")
+
+// The command must actually ask about every tool the plugin uses, or the
+// check silently stops covering one.
+{
+  const cmd = toolCheckCommand()
+  assert.equal(cmd[0], "bash")
+  for (const t of REQUIRED_TOOLS) assert.ok(cmd[2].includes(t.name), t.name)
+}
+
 // --- hostOf ----------------------------------------------------------------
 
 assert.equal(hostOf("http://nvr.lan:5000"), "nvr.lan")

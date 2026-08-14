@@ -14,6 +14,18 @@ this release is Frigate only.
 omarchy plugin add https://github.com/chameleonbr/omarchy_cameras.git --enable --yes
 ```
 
+It shells out to `curl`, `mpv`, `jq`, `secret-tool` and `python3`. Omarchy
+ships mpv, jq and libsecret; curl and python3 usually arrive as dependencies
+of something else, so a lean install can be missing them:
+
+```bash
+sudo pacman -S --needed curl python jq mpv libsecret
+```
+
+Config names anything missing at the top of the screen rather than failing
+quietly — a command that is not there makes the plugin's helper processes fail
+to start, which otherwise shows up nowhere.
+
 Then point it at Frigate (see Setup) and restart the shell once:
 
 ```bash
