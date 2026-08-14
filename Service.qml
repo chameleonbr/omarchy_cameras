@@ -231,52 +231,48 @@ Item {
     placementTimer.restart()
   }
 
-  // Ids already handled, so the same detection does not alert twice when it
-  // shows up first as in-progress and again as ended.
+  // Ids already handled. A detection stays in the in-progress list for as long
+  // as it runs, so it comes back on every poll until it ends — the id is what
+  // keeps it to one alert.
   property var seenEvents: ({})
-  // The first reply from each of the two queries only records what Frigate
-  // already knows; neither alerts. A shell restart, or arming alerts after
-  // they have been off for a while, must not replay the backlog as a burst.
-  property int syncRemaining: 2
+  // The first reply only records what Frigate already knows. A shell restart,
+  // or arming alerts after they have been off, must not replay the backlog.
+  property bool eventsSynced: false
 
-  // Frigate reports an ended detection and a running one through different
-  // queries — plain /api/events excludes anything still in progress. Poll
-  // both, or every alert waits for the subject to walk out of frame first.
+  // Only detections that are still running. Plain /api/events would report the
+  // same thing later, once it has ended, which is exactly the delay this is
+  // avoiding — so it is not worth a second request.
   //
-  // The window reaches slightly further back than the newest event seen, so a
-  // detection that started before it but is reported later is still in range.
-  // Id dedup, not the window, is what prevents repeats.
+  // The window reaches further back than the newest event seen, so a detection
+  // that started before it but is reported late is still in range. Id dedup,
+  // not the window, is what prevents repeats.
   function pollEvents() {
-    if (!config.alerts.enabled || !config.frigate.url) return
-    var after = Math.max(0, lastEventTime - 120)
-    if (!liveEventsProcess.running) {
-      liveEventsProcess.command =
-        frigateCommand("/api/events?limit=20&in_progress=1&after=" + after)
-      liveEventsProcess.running = true
-    }
-    if (!eventsProcess.running) {
-      eventsProcess.command = frigateCommand("/api/events?limit=20&after=" + after)
-      eventsProcess.running = true
-    }
+    if (!config.alerts.enabled || !config.frigate.url || eventsProcess.running) return
+    eventsProcess.command = frigateCommand(
+      "/api/events?limit=20&in_progress=1&after=" + Math.max(0, lastEventTime - 120))
+    eventsProcess.running = true
   }
 
   function applyEvents(raw) {
     var result = Cameras.newEvents(raw, config.alerts.labels, seenEvents)
 
-    // Mark every id in the payload, matching or not, so the next poll can skip
-    // the whole batch instead of re-examining it.
-    var ids = Cameras.eventIds(raw)
-    var seen = seenEvents
-    for (var i = 0; i < ids.length; i++) seen[ids[i].id] = ids[i].startTime
-
     if (result.newest > lastEventTime) {
       lastEventTime = result.newest
       stateFile.setText(String(lastEventTime) + "\n")
     }
-    seenEvents = Cameras.pruneSeen(seen, lastEventTime - 600)
 
-    if (syncRemaining > 0) {
-      syncRemaining--
+    // Prune first, then re-mark everything in this payload — never the other
+    // way round. A detection can stay in progress for hours (a parked car, a
+    // bicycle left in frame), and pruning it after marking would drop an id
+    // that is still being reported, so the next poll would see it as new and
+    // alert on it again every few seconds.
+    var seen = Cameras.pruneSeen(seenEvents, lastEventTime - 600)
+    var ids = Cameras.eventIds(raw)
+    for (var i = 0; i < ids.length; i++) seen[ids[i].id] = ids[i].startTime
+    seenEvents = seen
+
+    if (!eventsSynced) {
+      eventsSynced = true
       return
     }
     // Oldest first, so a burst stacks in the order it happened: the first
@@ -464,17 +460,22 @@ Item {
     onTriggered: root.fetchFrigateConfig()
   }
 
-  // ponytail: polling, not MQTT. No mosquitto client is installed, and five
+  // ponytail: polling, not MQTT. No mosquitto client is installed, and a few
   // seconds of lag on a doorway preview is not worth a dependency. Swap in
-  // mosquitto_sub if sub-second alerts ever matter.
+  // mosquitto_sub if sub-second alerts, or catching every last sub-3s
+  // detection, ever matters.
+  //
+  // 3s rather than 5s: watching only in-progress events means a detection that
+  // starts and ends between two polls is never seen at all, and halving the
+  // interval costs nothing now that each poll is one request instead of two.
   Timer {
-    interval: 5000
+    interval: 3000
     running: root.config.alerts.enabled && root.config.frigate.url !== ""
     repeat: true
     triggeredOnStart: true
     // Arming alerts starts a fresh sync, so whatever happened while they were
     // off stays off the screen.
-    onRunningChanged: if (running) root.syncRemaining = 2
+    onRunningChanged: if (running) root.eventsSynced = false
     onTriggered: root.pollEvents()
   }
 
@@ -505,17 +506,6 @@ Item {
       id: eventsStdout
       waitForEnd: true
       onStreamFinished: root.applyEvents(eventsStdout.text)
-    }
-  }
-
-  // Detections still in progress. Same handler: dedup is by id, so an event
-  // arriving here and then again from eventsProcess only ever alerts once.
-  Process {
-    id: liveEventsProcess
-    stdout: StdioCollector {
-      id: liveEventsStdout
-      waitForEnd: true
-      onStreamFinished: root.applyEvents(liveEventsStdout.text)
     }
   }
 

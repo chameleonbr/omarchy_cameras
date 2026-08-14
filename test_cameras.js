@@ -102,6 +102,29 @@ assert.deepEqual(pruneSeen({ a: 100, b: 200, c: 300 }, 200), { b: 200, c: 300 },
   "ids too old to come back in the query window are dropped")
 assert.deepEqual(pruneSeen({}, 0), {})
 
+// A detection can stay in progress for hours — a parked car, a bicycle left in
+// frame — and keeps being reported the whole time. Pruning must run before the
+// payload is re-marked, or its id is dropped while still live and it alerts
+// again on the very next poll. This is the caller's order, asserted here
+// because getting it backwards is silent and very loud on screen.
+{
+  const parked = { id: "parked", camera: "drive", label: "person", start_time: 100 }
+  const payload = JSON.stringify([parked,
+    { id: "fresh", camera: "door", label: "person", start_time: 5000 }])
+
+  let seen = pruneSeen({ parked: 100 }, 5000 - 600)
+  for (const e of eventIds(payload)) seen[e.id] = e.startTime
+  assert.deepEqual(newEvents(payload, ["person"], seen).events, [],
+    "a long-running detection stays seen across a prune")
+
+  // The other order loses it.
+  let wrong = { parked: 100 }
+  for (const e of eventIds(payload)) wrong[e.id] = e.startTime
+  wrong = pruneSeen(wrong, 5000 - 600)
+  assert.deepEqual(newEvents(payload, ["person"], wrong).events.map(e => e.id), ["parked"],
+    "marking before pruning re-alerts a detection that never stopped")
+}
+
 // --- eventImageUrl ---------------------------------------------------------
 //
 // The alert shows this still, not a live frame: fast movement is over before

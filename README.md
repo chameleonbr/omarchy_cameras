@@ -86,18 +86,20 @@ rectangle appears for 5s exactly where alerts will, so you can see the spot
 without waiting for something to walk past a camera. **Show me** replays it.
 
 Alerts fire **while the detection is still happening**, not once it is over.
-Frigate's plain `/api/events` only returns events that have already ended, so
-the poll also asks `in_progress=1` and shows whichever arrives first —
-otherwise every alert waits for the subject to walk out of frame. Measured
-against a live camera: the preview lands about 10s after the detection starts,
-with the event still running.
+The poll asks Frigate only for `in_progress=1`; its plain `/api/events` returns
+events that have already ended, which is exactly the delay worth avoiding.
+Measured against a live camera: the preview lands about 10s after the detection
+starts, while the event is still running.
 
-Because a detection is reported twice — once running, once ended — alerts
-deduplicate on the event id rather than on a timestamp. The newest timestamp is
-still kept in `~/.local/state/omarchy/cameras-last-event`, but only to bound
-the query window. The first reply to each of the two queries after the shell
-starts (or after alerts are armed) records what Frigate already knows and shows
-nothing, so a restart never replays the backlog as a burst.
+The trade is that a detection which starts and finishes inside one poll
+interval is never seen, so the poll runs every 3s.
+
+A running detection is reported on every poll until it ends, so alerts
+deduplicate on the event id. The newest timestamp is still kept in
+`~/.local/state/omarchy/cameras-last-event`, but only to bound the query
+window. The first reply after the shell starts, or after alerts are armed,
+records what Frigate already knows and shows nothing — so neither a restart nor
+a car that has been parked in frame since this morning turns into an alert.
 
 ### The viewer window
 

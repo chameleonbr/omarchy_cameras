@@ -178,19 +178,24 @@ rest. Asking `:8554` for a camera go2rtc never heard of yields a dead window,
 and on a typical install most cameras are not restreamed.
 
 **`/api/events` returns only events that have already ended.** Live ones come
-from `/api/events?in_progress=1` and carry `end_time: null`. The poller hits
-both, or every alert waits for the subject to leave the frame. Both replies go
-through the same `applyEvents`.
+from `/api/events?in_progress=1` and carry `end_time: null`. The poller asks
+only for those — waiting for the ended copy is the delay worth avoiding — and
+runs every 3s, because a detection shorter than one interval is never seen at
+all.
 
-That makes **id** the dedup key, not a timestamp: one detection is reported
-twice, running then ended, with the same id and `start_time`. A timestamp
-watermark would also let a long-running event advance the mark past a shorter
-one that started earlier on another camera and swallow it. `lastEventTime`
-survives only to bound the query window (`after = newest - 120`);
-`seenEvents` (id → start_time, pruned at `newest - 600`) is what prevents
-repeats. `syncRemaining` starts at 2 so the first reply from *each* query is a
-sync that shows nothing — one counter would let the second query replay the
-backlog.
+Dedup is on **id**, not a timestamp: a running detection comes back on every
+poll until it ends. A timestamp watermark would also let a long-running event
+advance the mark past a shorter one that started earlier on another camera and
+swallow it. `lastEventTime` survives only to bound the query window
+(`after = newest - 120`); `seenEvents` (id → start_time) is what prevents
+repeats.
+
+**Prune `seenEvents` before re-marking the payload, never after.** A detection
+can stay in progress for hours — a parked car, a bicycle left in frame — and
+`pruneSeen(seen, newest - 600)` will happily drop an id that is still being
+reported. Mark the payload after pruning and anything still live survives;
+do it the other way round and that camera alerts every 3 seconds. There is a
+test asserting both orders.
 
 ## Credentials
 
