@@ -26,6 +26,8 @@ Panel {
   readonly property var cameras: service ? service.cameras : []
   readonly property bool hasCameras: cameras.length > 0
   readonly property bool alertsOn: service ? service.config.alerts.enabled : false
+  readonly property bool frigateSource: service ? service.config.sources.frigate : false
+  readonly property bool onvifSource: service ? service.config.sources.onvif : false
 
   // "grid" or "config".
   property string view: "grid"
@@ -325,6 +327,7 @@ Panel {
         || frigateUserField.activeFocus || frigatePasswordField.activeFocus
         || durationField.activeFocus || alertWidthField.activeFocus
         || mqttPasswordField.activeFocus
+        || onvifUserField.activeFocus || onvifPasswordField.activeFocus
       onMoveRequested: function(dx, dy) {
         if (root.view === "config") return
         if (!root.cursorActive) { root.cursorActive = true; return }
@@ -384,7 +387,10 @@ Panel {
                   selected: root.alertsOn
                   foreground: root.foreground
                   fontFamily: root.fontFamily
-                  enabled: root.service && root.service.config.frigate.url !== ""
+                  // Alerts come from Frigate events, so the button is dead
+                  // weight without that source.
+                  enabled: root.frigateSource && root.service
+                    && root.service.config.frigate.url !== ""
                   opacity: enabled ? 1 : 0.5
                   onClicked: if (root.service) root.service.setAlertsEnabled(!root.alertsOn)
                 }
@@ -499,275 +505,483 @@ Panel {
               font.bold: true
             }
 
+            // Which sources exist at all. Everything below belongs to one of
+            // them, so someone running plain ONVIF cameras never has to read
+            // about restreams, logins or MQTT.
             PanelSectionHeader {
-              text: "Frigate"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            FieldLabel { text: "Server URL" }
-
-            TextField {
-              id: urlField
-              KeyNavigation.tab: frigateUserField
-              KeyNavigation.backtab: mqttPasswordField
-              width: parent.width
-              placeholderText: "http://nvr.lan:5000"
-              foreground: root.foreground
-              onAccepted: saveFrigate.clicked()
-            }
-
-            FieldLabel { text: "Login — only if Frigate asks for one" }
-
-            Row {
-              width: parent.width
-              spacing: Style.space(8)
-
-              TextField {
-                id: frigateUserField
-                KeyNavigation.tab: frigatePasswordField
-                KeyNavigation.backtab: urlField
-                width: (parent.width - Style.space(8)) / 2
-                placeholderText: "user"
-                foreground: root.foreground
-                onAccepted: saveFrigate.clicked()
-              }
-
-              TextField {
-                id: frigatePasswordField
-                KeyNavigation.tab: durationField
-                KeyNavigation.backtab: frigateUserField
-                width: (parent.width - Style.space(8)) / 2
-                placeholderText: "password"
-                password: true
-                foreground: root.foreground
-                onAccepted: saveFrigate.clicked()
-              }
-            }
-
-            Actions {
-              Button {
-                id: saveFrigate
-                text: "Save"
-                bordered: true
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: if (root.service) {
-                  root.service.setFrigate(urlField.text,
-                    frigateUserField.text, frigatePasswordField.text)
-                  frigatePasswordField.text = ""
-                }
-              }
-            }
-
-            Hint {
-              text: "Passwords go to the keyring, never to the config file. "
-                + "Leaving one blank keeps the one already stored."
-            }
-
-            PanelSeparator { foreground: root.foreground }
-
-            PanelSectionHeader {
-              text: "Motion alerts"
+              text: "Sources"
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
 
             Toggle {
               width: parent.width
-              label: "Pop up a preview on detection"
-              description: root.service && !root.service.config.frigate.url
-                ? "Needs a Frigate URL first" : "From Frigate's own detections"
-              checked: root.alertsOn
+              label: "Frigate"
+              description: !root.service ? ""
+                : (!root.service.config.sources.frigate ? "Off"
+                    : (root.service.config.frigate.url
+                        ? root.service.config.frigate.url : "Needs a server URL"))
+              checked: root.service && root.service.config.sources.frigate
               foreground: root.foreground
               fontFamily: root.fontFamily
-              onClicked: if (root.service) root.service.setAlertsEnabled(!checked)
+              onClicked: if (root.service) root.service.setSource("frigate", !checked)
             }
 
-            // Everything below only matters once alerts are on, and hiding it
-            // keeps the form short enough to read without scrolling.
-            Column {
+            Toggle {
               width: parent.width
-              spacing: Style.space(10)
-              visible: root.alertsOn
-
-              Dropdown {
-                width: parent.width
-                label: "Monitor"
-                value: root.service ? root.service.config.alerts.monitor : ""
-                options: root.monitorOptions
-                fontFamily: root.fontFamily
-                onChanged: function(v) { if (root.service) root.service.saveAlerts({ monitor: v }) }
+              label: "ONVIF cameras"
+              description: {
+                if (!root.service) return ""
+                if (!root.service.config.sources.onvif) return "Off"
+                var n = root.service.config.onvif.length
+                return n === 0 ? "None added yet"
+                  : n + (n === 1 ? " camera added" : " cameras added")
               }
-
-              Dropdown {
-                width: parent.width
-                label: "Corner"
-                value: root.service ? root.service.config.alerts.position : "top-center"
-                options: [
-                  { value: "top-left", label: "Top left" },
-                  { value: "top-center", label: "Top center (by the clock)" },
-                  { value: "top-right", label: "Top right" }
-                ]
-                fontFamily: root.fontFamily
-                onChanged: function(v) { if (root.service) root.service.saveAlerts({ position: v }) }
-              }
-
-              Row {
-                width: parent.width
-                spacing: Style.space(12)
-
-                Column {
-                  spacing: Style.space(4)
-                  FieldLabel { text: "Seconds on screen" }
-                  TextField {
-                    id: durationField
-                    KeyNavigation.tab: alertWidthField
-                    KeyNavigation.backtab: frigatePasswordField
-                    width: Style.space(100)
-                    placeholderText: "12"
-                    foreground: root.foreground
-                    inputMethodHints: Qt.ImhDigitsOnly
-                    validator: IntValidator { bottom: 2; top: 300 }
-                    onAccepted: saveAlertSizing.clicked()
-                  }
-                }
-
-                Column {
-                  spacing: Style.space(4)
-                  FieldLabel { text: "Preview width" }
-                  TextField {
-                    id: alertWidthField
-                    KeyNavigation.tab: mqttPasswordField
-                    KeyNavigation.backtab: durationField
-                    width: Style.space(100)
-                    placeholderText: "320"
-                    foreground: root.foreground
-                    inputMethodHints: Qt.ImhDigitsOnly
-                    validator: IntValidator { bottom: 120; top: 960 }
-                    onAccepted: saveAlertSizing.clicked()
-                  }
-                }
-              }
-
-              Actions {
-                Button {
-                  text: "Show me"
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: if (root.service) root.service.showPlacement()
-                }
-
-                Button {
-                  id: saveAlertSizing
-                  text: "Save"
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  onClicked: if (root.service) {
-                    root.service.saveAlerts({
-                      durationSec: parseInt(durationField.text, 10) || 12,
-                      width: parseInt(alertWidthField.text, 10) || 320
-                    })
-                  }
-                }
-              }
-
-              Hint {
-                text: "Changing the monitor, corner or width rehearses the "
-                  + "placement for 5s. Middle-click the bar icon to switch "
-                  + "alerts off without opening this."
-              }
+              checked: root.service && root.service.config.sources.onvif
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: if (root.service) root.service.setSource("onvif", !checked)
             }
 
             PanelSeparator {
               foreground: root.foreground
-              visible: root.alertsOn
-            }
-
-            PanelSectionHeader {
-              text: "MQTT"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              visible: root.alertsOn
-            }
-
-            Toggle {
-              width: parent.width
-              visible: root.alertsOn
-              label: "Alert the instant Frigate detects"
-              description: root.service ? root.service.mqttStatus : ""
-              checked: root.service && root.service.config.alerts.useMqtt
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: if (root.service) root.service.setMqttEnabled(!checked)
+              visible: root.frigateSource || root.onvifSource
             }
 
             Column {
               width: parent.width
               spacing: Style.space(10)
-              visible: root.alertsOn && root.service && root.service.config.alerts.useMqtt
+              visible: root.frigateSource
 
-              FieldLabel {
-                text: root.service && root.service.mqttInfo.user
-                  ? "Broker password for " + root.service.mqttInfo.user
-                  : "Broker password"
+              PanelSectionHeader {
+                text: "Frigate"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
               }
+
+              FieldLabel { text: "Server URL" }
+
+              TextField {
+                id: urlField
+                KeyNavigation.tab: frigateUserField
+                KeyNavigation.backtab: mqttPasswordField
+                width: parent.width
+                placeholderText: "http://nvr.lan:5000"
+                foreground: root.foreground
+                onAccepted: saveFrigate.clicked()
+              }
+
+              FieldLabel { text: "Login — only if Frigate asks for one" }
 
               Row {
                 width: parent.width
                 spacing: Style.space(8)
 
                 TextField {
-                  id: mqttPasswordField
-                  KeyNavigation.tab: urlField
-                  KeyNavigation.backtab: alertWidthField
-                  width: parent.width - mqttSave.width - Style.space(8)
+                  id: frigateUserField
+                  KeyNavigation.tab: frigatePasswordField
+                  KeyNavigation.backtab: urlField
+                  width: (parent.width - Style.space(8)) / 2
+                  placeholderText: "user"
+                  foreground: root.foreground
+                  onAccepted: saveFrigate.clicked()
+                }
+
+                TextField {
+                  id: frigatePasswordField
+                  KeyNavigation.tab: durationField
+                  KeyNavigation.backtab: frigateUserField
+                  width: (parent.width - Style.space(8)) / 2
                   placeholderText: "password"
                   password: true
                   foreground: root.foreground
-                  onAccepted: mqttSave.clicked()
+                  onAccepted: saveFrigate.clicked()
                 }
+              }
 
+              Actions {
                 Button {
-                  id: mqttSave
-                  text: "Connect"
+                  id: saveFrigate
+                  text: "Save"
                   bordered: true
                   foreground: root.foreground
                   fontFamily: root.fontFamily
                   onClicked: if (root.service) {
-                    root.service.storeMqttPassword(mqttPasswordField.text)
-                    mqttPasswordField.text = ""
+                    root.service.setFrigate(urlField.text,
+                      frigateUserField.text, frigatePasswordField.text)
+                    frigatePasswordField.text = ""
                   }
                 }
               }
 
-              // Connecting takes a moment and failing takes 70ms, so without
-              // this the Connect button looks like it did nothing either way.
-              Text {
-                width: parent.width
-                wrapMode: Text.WordWrap
-                text: root.service ? root.service.mqttStatus : ""
-                color: !root.service ? root.dim
-                  : (root.service.mqttConnected ? root.accent
-                      : (root.service.mqttError ? root.urgent : root.dim))
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: root.service
-                  && (root.service.mqttConnected || root.service.mqttError !== "")
+              Hint {
+                text: "Passwords go to the keyring, never to the config file. "
+                  + "Leaving one blank keeps the one already stored."
               }
 
-              Hint {
-                text: {
-                  if (!root.service) return ""
-                  var info = root.service.mqttInfo
-                  return "Broker, port, topic and user all come from Frigate ("
-                    + info.host + ":" + info.port + ", " + info.prefix
-                    + "/events). Polling keeps running until this connects."
+              PanelSeparator { foreground: root.foreground }
+
+              PanelSectionHeader {
+                text: "Motion alerts"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              Toggle {
+                width: parent.width
+                label: "Pop up a preview on detection"
+                description: root.service && !root.service.config.frigate.url
+                  ? "Needs a Frigate URL first" : "From Frigate's own detections"
+                checked: root.alertsOn
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: if (root.service) root.service.setAlertsEnabled(!checked)
+              }
+
+              // Everything below only matters once alerts are on, and hiding it
+              // keeps the form short enough to read without scrolling.
+              Column {
+                width: parent.width
+                spacing: Style.space(10)
+                visible: root.alertsOn
+
+                Dropdown {
+                  width: parent.width
+                  label: "Monitor"
+                  value: root.service ? root.service.config.alerts.monitor : ""
+                  options: root.monitorOptions
+                  fontFamily: root.fontFamily
+                  onChanged: function(v) { if (root.service) root.service.saveAlerts({ monitor: v }) }
+                }
+
+                Dropdown {
+                  width: parent.width
+                  label: "Corner"
+                  value: root.service ? root.service.config.alerts.position : "top-center"
+                  options: [
+                    { value: "top-left", label: "Top left" },
+                    { value: "top-center", label: "Top center (by the clock)" },
+                    { value: "top-right", label: "Top right" }
+                  ]
+                  fontFamily: root.fontFamily
+                  onChanged: function(v) { if (root.service) root.service.saveAlerts({ position: v }) }
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(12)
+
+                  Column {
+                    spacing: Style.space(4)
+                    FieldLabel { text: "Seconds on screen" }
+                    TextField {
+                      id: durationField
+                      KeyNavigation.tab: alertWidthField
+                      KeyNavigation.backtab: frigatePasswordField
+                      width: Style.space(100)
+                      placeholderText: "12"
+                      foreground: root.foreground
+                      inputMethodHints: Qt.ImhDigitsOnly
+                      validator: IntValidator { bottom: 2; top: 300 }
+                      onAccepted: saveAlertSizing.clicked()
+                    }
+                  }
+
+                  Column {
+                    spacing: Style.space(4)
+                    FieldLabel { text: "Preview width" }
+                    TextField {
+                      id: alertWidthField
+                      KeyNavigation.tab: mqttPasswordField
+                      KeyNavigation.backtab: durationField
+                      width: Style.space(100)
+                      placeholderText: "320"
+                      foreground: root.foreground
+                      inputMethodHints: Qt.ImhDigitsOnly
+                      validator: IntValidator { bottom: 120; top: 960 }
+                      onAccepted: saveAlertSizing.clicked()
+                    }
+                  }
+                }
+
+                Actions {
+                  Button {
+                    text: "Show me"
+                    bordered: true
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: if (root.service) root.service.showPlacement()
+                  }
+
+                  Button {
+                    id: saveAlertSizing
+                    text: "Save"
+                    bordered: true
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: if (root.service) {
+                      root.service.saveAlerts({
+                        durationSec: parseInt(durationField.text, 10) || 12,
+                        width: parseInt(alertWidthField.text, 10) || 320
+                      })
+                    }
+                  }
+                }
+
+                Hint {
+                  text: "Changing the monitor, corner or width rehearses the "
+                    + "placement for 5s. Middle-click the bar icon to switch "
+                    + "alerts off without opening this."
+                }
+              }
+
+              PanelSeparator {
+                foreground: root.foreground
+                visible: root.alertsOn
+              }
+
+              PanelSectionHeader {
+                text: "MQTT"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                visible: root.alertsOn
+              }
+
+              Toggle {
+                width: parent.width
+                visible: root.alertsOn
+                label: "Alert the instant Frigate detects"
+                description: root.service ? root.service.mqttStatus : ""
+                checked: root.service && root.service.config.alerts.useMqtt
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: if (root.service) root.service.setMqttEnabled(!checked)
+              }
+
+              Column {
+                width: parent.width
+                spacing: Style.space(10)
+                visible: root.alertsOn && root.service && root.service.config.alerts.useMqtt
+
+                FieldLabel {
+                  text: root.service && root.service.mqttInfo.user
+                    ? "Broker password for " + root.service.mqttInfo.user
+                    : "Broker password"
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+
+                  TextField {
+                    id: mqttPasswordField
+                    KeyNavigation.tab: urlField
+                    KeyNavigation.backtab: alertWidthField
+                    width: parent.width - mqttSave.width - Style.space(8)
+                    placeholderText: "password"
+                    password: true
+                    foreground: root.foreground
+                    onAccepted: mqttSave.clicked()
+                  }
+
+                  Button {
+                    id: mqttSave
+                    text: "Connect"
+                    bordered: true
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: if (root.service) {
+                      root.service.storeMqttPassword(mqttPasswordField.text)
+                      mqttPasswordField.text = ""
+                    }
+                  }
+                }
+
+                // Connecting takes a moment and failing takes 70ms, so without
+                // this the Connect button looks like it did nothing either way.
+                Text {
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  text: root.service ? root.service.mqttStatus : ""
+                  color: !root.service ? root.dim
+                    : (root.service.mqttConnected ? root.accent
+                        : (root.service.mqttError ? root.urgent : root.dim))
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: root.service
+                    && (root.service.mqttConnected || root.service.mqttError !== "")
+                }
+
+                Hint {
+                  text: {
+                    if (!root.service) return ""
+                    var info = root.service.mqttInfo
+                    return "Broker, port, topic and user all come from Frigate ("
+                      + info.host + ":" + info.port + ", " + info.prefix
+                      + "/events). Polling keeps running until this connects."
+                  }
                 }
               }
             }
+
+            PanelSeparator {
+              foreground: root.foreground
+              visible: root.onvifSource
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(10)
+              visible: root.onvifSource
+
+              PanelSectionHeader {
+                text: "ONVIF"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              FieldLabel { text: "Camera login, used for every device found" }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(8)
+
+                TextField {
+                  id: onvifUserField
+                  KeyNavigation.tab: onvifPasswordField
+                  KeyNavigation.backtab: mqttPasswordField
+                  width: (parent.width - Style.space(8)) / 2
+                  placeholderText: "user"
+                  foreground: root.foreground
+                }
+
+                TextField {
+                  id: onvifPasswordField
+                  KeyNavigation.tab: urlField
+                  KeyNavigation.backtab: onvifUserField
+                  width: (parent.width - Style.space(8)) / 2
+                  placeholderText: "password"
+                  password: true
+                  foreground: root.foreground
+                }
+              }
+
+              Actions {
+                Button {
+                  text: root.service && root.service.discovering
+                    ? "Searching…" : "Find cameras"
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  enabled: root.service && !root.service.discovering
+                  opacity: enabled ? 1 : 0.5
+                  onClicked: if (root.service) root.service.discover()
+                }
+              }
+
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                visible: text !== ""
+                text: !root.service ? ""
+                  : (root.service.probeError || root.service.discoverError)
+                color: root.urgent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              // Devices the last search turned up. Adding one asks it for its
+              // stream URL with the credentials above and writes it to
+              // cameras.json; the password goes to the keyring.
+              Repeater {
+                model: root.service ? root.service.discovered : []
+
+                Row {
+                  required property var modelData
+                  width: parent.width
+                  spacing: Style.space(8)
+
+                  Column {
+                    width: parent.width - addButton.width - Style.space(8)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                      width: parent.width
+                      elide: Text.ElideRight
+                      text: modelData.name
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    Text {
+                      width: parent.width
+                      elide: Text.ElideRight
+                      text: modelData.host
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+
+                  Button {
+                    id: addButton
+                    text: root.service && root.service.probing === modelData.xaddr
+                      ? "Adding…" : "Add"
+                    bordered: true
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    enabled: root.service && root.service.probing === ""
+                    opacity: enabled ? 1 : 0.5
+                    onClicked: if (root.service) {
+                      root.service.probeDevice(modelData.xaddr,
+                        onvifUserField.text, onvifPasswordField.text)
+                    }
+                  }
+                }
+              }
+
+              Hint {
+                text: "Search asks the local network over WS-Discovery. Adding a "
+                  + "camera reads its RTSP address over ONVIF, so the address "
+                  + "never has to be typed by hand."
+              }
+
+              FieldLabel {
+                text: "Added"
+                visible: root.service && root.service.config.onvif.length > 0
+              }
+
+              Repeater {
+                model: root.service ? root.service.config.onvif : []
+
+                Row {
+                  required property var modelData
+                  width: parent.width
+                  spacing: Style.space(8)
+
+                  Text {
+                    width: parent.width - removeButton.width - Style.space(8)
+                    anchors.verticalCenter: parent.verticalCenter
+                    elide: Text.ElideRight
+                    text: modelData.name + (modelData.ptz ? "  ·  PTZ" : "")
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+
+                  Button {
+                    id: removeButton
+                    text: "Remove"
+                    bordered: true
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: if (root.service) root.service.removeOnvif(modelData.name)
+                  }
+                }
+              }
+            }
+
           }
         }
       }

@@ -5,6 +5,10 @@
 // over plain data.
 
 var DEFAULT_CONFIG = {
+  // Which camera sources the user has turned on. Everything belonging to a
+  // source that is off stays out of the config screen — someone running plain
+  // ONVIF cameras has no reason to read about restreams and MQTT.
+  sources: { frigate: false, onvif: false },
   frigate: { url: "", rtspPort: 8554, user: "" },
   notifyLabels: ["person"],
   alerts: {
@@ -99,8 +103,10 @@ function parseConfig(raw) {
   var port = parseInt(frigate.rtspPort, 10)
   var notifyLabels = Array.isArray(parsed.notifyLabels)
     ? parsed.notifyLabels.map(String) : DEFAULT_CONFIG.notifyLabels.slice()
+  var onvif = Array.isArray(parsed.onvif) ? parsed.onvif.filter(isObject) : []
 
   return {
+    sources: parseSources(parsed.sources, frigate, onvif),
     frigate: {
       url: trimSlash(frigate.url),
       rtspPort: isFinite(port) && port > 0 && port < 65536
@@ -111,7 +117,20 @@ function parseConfig(raw) {
     },
     notifyLabels: notifyLabels,
     alerts: parseAlerts(parsed.alerts, notifyLabels),
-    onvif: Array.isArray(parsed.onvif) ? parsed.onvif.filter(isObject) : []
+    onvif: onvif
+  }
+}
+
+// A config written before sources existed has no `sources` block, and turning
+// both off would silently hide a working setup. Fall back to what is actually
+// configured: a Frigate URL means Frigate, saved cameras mean ONVIF.
+function parseSources(raw, frigate, onvif) {
+  var sources = isObject(raw) ? raw : {}
+  return {
+    frigate: sources.frigate === undefined
+      ? !!trimSlash(frigate.url) : sources.frigate === true,
+    onvif: sources.onvif === undefined
+      ? onvif.length > 0 : sources.onvif === true
   }
 }
 

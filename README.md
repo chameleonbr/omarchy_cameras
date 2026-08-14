@@ -5,8 +5,8 @@ Frigate camera viewer for [Omarchy](https://omarchy.org) 4 ("Quattro").
 Live thumbnails in the bar, motion alerts as they happen, fullscreen playback
 in mpv.
 
-ONVIF discovery is written and tested but not yet exposed in the interface —
-this release is Frigate only.
+Cameras come from Frigate, from ONVIF discovery on the local network, or from
+both at once.
 
 ## Install
 
@@ -35,10 +35,15 @@ omarchy restart shell
 ## Setup
 
 Click the CCTV icon in the bar and hit **Config** (a fresh install opens
-straight there). The Frigate URL is the only required field — everything else,
-including the login, the motion alerts and MQTT, is optional and sits below it.
+straight there). Start by switching on the sources you actually have —
+**Frigate**, **ONVIF cameras**, or both. Each one's settings only appear once
+it is on, so an ONVIF-only setup never has to read about restreams or MQTT.
+
 Settings land in `~/.config/omarchy/cameras.json`; every password goes to the
 keyring instead, under `service=omarchy-cameras`.
+
+A source that is off contributes no cameras and starts no background
+processes.
 
 The same writes are available from a script:
 
@@ -195,6 +200,7 @@ o.window({ class = "mpv", title = "^omarchy-cameras:" }, {
 
 ```json
 {
+  "sources": { "frigate": true, "onvif": false },
   "frigate": {
     "url": "http://nvr.lan:5000",
     "rtspPort": 8554,
@@ -221,8 +227,14 @@ o.window({ class = "mpv", title = "^omarchy-cameras:" }, {
   port is read back out of Frigate's own camera inputs: a restreamed camera
   pulls from `rtsp://127.0.0.1:<port>/<name>`, so the number is already in
   `/api/config`.
-- `onvif[]` — ONVIF support is built but not surfaced while the Frigate side is
-  being finished. The scripts and IPC verbs still work; see Development.
+- `sources` — which of `frigate` and `onvif` are switched on. A config written
+  before this existed migrates from what it already has: a Frigate URL means
+  Frigate, saved cameras mean ONVIF.
+- `onvif[]` — written by **Find cameras** in Config, which asks the local
+  network over WS-Discovery and then reads each camera's RTSP address over
+  ONVIF. Hand-editing is fine:
+  `{"name": …, "rtsp": …, "user": …, "ptz": true|false, "xaddr": …}`.
+  ONVIF passwords go to the keyring under `key=onvif-<host>`.
 - `alerts` — see Motion alerts above. `monitor` is a connector name as the
   compositor reports it (`DP-1`, `HDMI-A-1`); empty means the first screen.
   `labels` falls back to `notifyLabels` when it is absent or empty.

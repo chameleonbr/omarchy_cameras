@@ -39,12 +39,7 @@ python3 test_onvif.py  # WS-Security digest, SOAP parsing, credential handling
 omarchy plugin validate .
 ```
 
-ONVIF is built and tested but deliberately not in the config UI while the
-Frigate side is being finished. `Cameras.onvifCameras`, the scripts and the
-`discover`/`discovery` IPC verbs all still work — do not delete them, and put
-the UI section back rather than rewriting it.
-
-Both test files are single scripts of `assert` calls with no framework — run
+All three test files are single scripts of `assert` calls with no framework — run
 them whole, there is nothing to run individually. Neither touches the network.
 
 `test_cameras.js` `eval`s `Cameras.js` into its own scope rather than importing
@@ -178,6 +173,13 @@ comes back through `onLoaded` and rebuilds the camera list. Never write it from
 `Panel.qml`, and keep the config form's fields uncontrolled while open — a
 binding straight to the config rewrites what the user is typing on every
 reload.
+
+**A source that is off must cost nothing.** `config.sources` gates both the
+config UI and the runtime: no cameras, no polling, no MQTT, no mirror. Check
+it with `frigateEnabled()` inside anything `onConfigChanged` calls — the
+`frigateOn` binding has not been re-evaluated yet while its own change handler
+runs, so it still holds the previous answer and the Frigate fetch silently
+never fires. The binding is fine for UI and `Timer.running`.
 
 **Every external command belongs in `Cameras.REQUIRED_TOOLS`.** A missing
 binary makes `Process` fail to start, which emits no signal the plugin can see

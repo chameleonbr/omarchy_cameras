@@ -151,6 +151,29 @@ assert.equal(
     ["person"], {}).events[0].hasSnapshot,
   true)
 
+// --- sources ---------------------------------------------------------------
+//
+// The toggles decide which half of the config screen exists. Getting the
+// migration wrong would silently hide a working setup, so the fallback for a
+// config written before `sources` existed is what is actually configured.
+
+assert.deepEqual(parseConfig("").sources, { frigate: false, onvif: false },
+  "a fresh install starts with neither, and picks in the form")
+assert.deepEqual(parseConfig('{"frigate":{"url":"http://nvr:5000"}}').sources,
+  { frigate: true, onvif: false }, "an existing Frigate URL means Frigate was in use")
+assert.deepEqual(
+  parseConfig('{"onvif":[{"name":"a","rtsp":"rtsp://x/1"}]}').sources,
+  { frigate: false, onvif: true }, "saved ONVIF cameras mean ONVIF was in use")
+
+// An explicit block always wins, including switching a configured source off.
+assert.deepEqual(
+  parseConfig('{"sources":{"frigate":false,"onvif":true},"frigate":{"url":"http://nvr:5000"}}').sources,
+  { frigate: false, onvif: true })
+assert.deepEqual(parseConfig('{"sources":{"frigate":"yes"}}').sources.frigate, false,
+  "only a real boolean counts")
+assert.deepEqual(parseConfig('{"sources":{}, "frigate":{"url":"http://nvr:5000"}}').sources,
+  { frigate: true, onvif: false }, "an empty block still migrates each key")
+
 // --- dependency check ------------------------------------------------------
 //
 // A missing binary makes Process fail to start, which is invisible apart from

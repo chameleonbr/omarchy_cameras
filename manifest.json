@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "Andre Avila",
   "license": "MIT",
-  "description": "Frigate camera viewer: live thumbnails in the bar, motion alerts, fullscreen playback in mpv.",
+  "description": "Frigate and ONVIF camera viewer: live thumbnails in the bar, motion alerts, fullscreen playback in mpv.",
   "kinds": [
     "service",
     "bar-widget"

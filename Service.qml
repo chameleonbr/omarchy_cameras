@@ -95,9 +95,21 @@ Item {
     fetchFrigateConfig()
   }
 
+  // A source that is switched off contributes no cameras and starts no
+  // processes, so turning Frigate off really does leave an ONVIF-only setup.
+  // Read as a function inside anything onConfigChanged calls: a binding on
+  // `config` has not been re-evaluated yet at the moment its own change
+  // handler runs, so the property would still hold the previous answer.
+  function frigateEnabled() {
+    return config.sources.frigate === true && config.frigate.url !== ""
+  }
+
+  readonly property bool frigateOn: config.sources.frigate && config.frigate.url !== ""
+  readonly property bool onvifOn: config.sources.onvif
+
   function rebuild() {
-    var onvif = Cameras.onvifCameras(config, runtimeDir)
-    cameras = config.frigate.url
+    var onvif = config.sources.onvif ? Cameras.onvifCameras(config, runtimeDir) : []
+    cameras = frigateEnabled()
       ? Cameras.mergeCameras(
           Cameras.frigateCameras(frigateStdout.text, config.frigate, runtimeDir), onvif)
       : onvif
@@ -134,7 +146,9 @@ Item {
   // second code path for "config we just saved".
   function saveConfig(patch) {
     var next = {
-      frigate: { url: config.frigate.url, rtspPort: config.frigate.rtspPort },
+      sources: { frigate: config.sources.frigate, onvif: config.sources.onvif },
+      frigate: { url: config.frigate.url, rtspPort: config.frigate.rtspPort,
+                 user: config.frigate.user },
       notifyLabels: config.notifyLabels.slice(),
       alerts: config.alerts,
       onvif: config.onvif.slice()
@@ -164,6 +178,12 @@ Item {
     // A changed login invalidates any cookie jar and every mirrored frame.
     mirrorProcess.running = false
     Qt.callLater(syncMirror)
+  }
+
+  function setSource(name, enabled) {
+    var sources = { frigate: config.sources.frigate, onvif: config.sources.onvif }
+    sources[name] = enabled === true
+    saveConfig({ sources: sources })
   }
 
   function removeOnvif(name) {
@@ -273,8 +293,8 @@ Item {
   property string mqttError: ""
   readonly property bool mqttRunning: mqttProcess.running
 
-  readonly property bool mqttWanted: config.alerts.enabled && config.alerts.useMqtt
-    && mqttInfo.enabled && mqttInfo.host !== ""
+  readonly property bool mqttWanted: frigateOn && config.alerts.enabled
+    && config.alerts.useMqtt && mqttInfo.enabled && mqttInfo.host !== ""
 
   // One sentence the panel can show verbatim. Connecting takes a moment and
   // failing takes 70ms, so without this the Save button looks like it did
@@ -457,7 +477,7 @@ Item {
   // ------------------------------------------------------------- frigate
 
   function fetchFrigateConfig() {
-    if (!config.frigate.url || frigateProcess.running) return
+    if (!frigateEnabled() || frigateProcess.running) return
     loading = true
     frigateProcess.command = frigateCommand("/api/config")
     frigateProcess.running = true
@@ -561,7 +581,7 @@ Item {
   // often that happens and well above how often it is worth asking.
   Timer {
     interval: 300000
-    running: root.config.frigate.url !== ""
+    running: root.frigateOn
     repeat: true
     onTriggered: root.fetchFrigateConfig()
   }
@@ -579,8 +599,7 @@ Item {
   // is retrying — so the fast path failing costs latency, never alerts.
   Timer {
     interval: 3000
-    running: root.config.alerts.enabled && root.config.frigate.url !== ""
-      && !root.mqttConnected
+    running: root.config.alerts.enabled && root.frigateOn && !root.mqttConnected
     repeat: true
     triggeredOnStart: true
     // Arming alerts starts a fresh sync, so whatever happened while they were
@@ -646,7 +665,13 @@ Item {
   }
 
   // The first attempt happens the moment MQTT is switched on; retries wait.
-  onMqttWantedChanged: if (mqttWanted && !mqttProcess.running) mqttProcess.running = true
+  // Both directions: switching the Frigate source off has to take the broker
+  // connection down with it, not leave a subscriber running for a source the
+  // user just disabled.
+  onMqttWantedChanged: {
+    if (mqttWanted && !mqttProcess.running) mqttProcess.running = true
+    else if (!mqttWanted && mqttProcess.running) mqttProcess.running = false
+  }
 
   // Runs exactly while MQTT is wanted but not up, so one rule covers a
   // rejected password and a broker reboot alike. Polling fills the gap, which
