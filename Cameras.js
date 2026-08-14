@@ -87,39 +87,78 @@ function parseAlerts(raw, notifyLabels) {
   }
 }
 
-// New Frigate events worth alerting on, newest last.
+// New Frigate events worth alerting on, oldest first.
 //
-// `after` is both the query Frigate was given and the watermark this returns:
-// events are keyed on start_time, so advancing past the newest one seen is
-// what stops the same detection alerting twice. A restart that loses the
-// watermark must not replay history, so callers persist it.
-function newEvents(raw, after, labels) {
+// Deduplication is by event id, not by timestamp. Frigate reports a detection
+// twice — once while it is still running (`in_progress=1`, no end_time) and
+// again once it has ended — and both carry the same id and start_time. A
+// timestamp watermark alone would either alert twice or, worse, let a
+// still-running event advance the mark past a shorter one that started earlier
+// on another camera and swallow it.
+//
+// `seen` is a map of id -> start_time that the caller owns and updates.
+// `newest` comes back so the caller can keep querying a bounded window.
+function newEvents(raw, labels, seen) {
   var parsed = null
   try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
-  if (!Array.isArray(parsed)) return { events: [], after: after }
+  if (!Array.isArray(parsed)) return { events: [], newest: 0 }
 
   var wanted = {}
   for (var i = 0; i < labels.length; i++) wanted[String(labels[i]).toLowerCase()] = true
 
   var out = []
-  var watermark = after
+  var newest = 0
   for (var j = 0; j < parsed.length; j++) {
     var event = parsed[j]
     if (!isObject(event)) continue
+    var id = String(event.id || "")
     var start = Number(event.start_time)
-    if (!isFinite(start) || start <= after) continue
-    if (start > watermark) watermark = start
+    // Without a start time there is nothing to age out of `seen` by, and
+    // without an id there is no way to tell two detections apart.
+    if (!id || !isFinite(start)) continue
+    if (start > newest) newest = start
+    if (seen[id] !== undefined) continue
     if (!wanted[String(event.label || "").toLowerCase()]) continue
     out.push({
-      id: String(event.id || ""),
+      id: id,
       camera: String(event.camera || ""),
       label: String(event.label || ""),
       hasSnapshot: event.has_snapshot === true,
+      // Present only once the detection is over. The alert does not wait for
+      // it: an event is worth showing while it is still happening.
+      inProgress: event.end_time === null || event.end_time === undefined,
       startTime: start
     })
   }
   out.sort(function(a, b) { return a.startTime - b.startTime })
-  return { events: out, after: watermark }
+  return { events: out, newest: newest }
+}
+
+// Every id in a payload, so the caller can mark even non-matching events as
+// seen and not re-examine them on the next poll.
+function eventIds(raw) {
+  var parsed = null
+  try { parsed = JSON.parse(String(raw || "")) } catch (e) { return [] }
+  if (!Array.isArray(parsed)) return []
+  var out = []
+  for (var i = 0; i < parsed.length; i++) {
+    var event = parsed[i]
+    if (!isObject(event)) continue
+    var id = String(event.id || "")
+    var start = Number(event.start_time)
+    if (id && isFinite(start)) out.push({ id: id, startTime: start })
+  }
+  return out
+}
+
+// Drop ids that can no longer come back in the query window, so the seen map
+// does not grow for the life of the session.
+function pruneSeen(seen, before) {
+  var out = {}
+  for (var id in seen) {
+    if (seen[id] >= before) out[id] = seen[id]
+  }
+  return out
 }
 
 // Cameras out of Frigate's /api/config. Frigate already renders a JPEG per

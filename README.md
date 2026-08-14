@@ -85,10 +85,19 @@ Changing the monitor, corner or width rehearses the placement: a black
 rectangle appears for 5s exactly where alerts will, so you can see the spot
 without waiting for something to walk past a camera. **Show me** replays it.
 
-The newest event's timestamp is kept in
-`~/.local/state/omarchy/cameras-last-event`, so restarting the shell does not
-replay the day's detections as a burst of previews. The very first poll after
-that file is gone adopts the current timestamp and shows nothing.
+Alerts fire **while the detection is still happening**, not once it is over.
+Frigate's plain `/api/events` only returns events that have already ended, so
+the poll also asks `in_progress=1` and shows whichever arrives first —
+otherwise every alert waits for the subject to walk out of frame. Measured
+against a live camera: the preview lands about 10s after the detection starts,
+with the event still running.
+
+Because a detection is reported twice — once running, once ended — alerts
+deduplicate on the event id rather than on a timestamp. The newest timestamp is
+still kept in `~/.local/state/omarchy/cameras-last-event`, but only to bound
+the query window. The first reply to each of the two queries after the shell
+starts (or after alerts are armed) records what Frigate already knows and shows
+nothing, so a restart never replays the backlog as a burst.
 
 ### The viewer window
 

@@ -231,26 +231,57 @@ Item {
     placementTimer.restart()
   }
 
+  // Ids already handled, so the same detection does not alert twice when it
+  // shows up first as in-progress and again as ended.
+  property var seenEvents: ({})
+  // The first reply from each of the two queries only records what Frigate
+  // already knows; neither alerts. A shell restart, or arming alerts after
+  // they have been off for a while, must not replay the backlog as a burst.
+  property int syncRemaining: 2
+
+  // Frigate reports an ended detection and a running one through different
+  // queries — plain /api/events excludes anything still in progress. Poll
+  // both, or every alert waits for the subject to walk out of frame first.
+  //
+  // The window reaches slightly further back than the newest event seen, so a
+  // detection that started before it but is reported later is still in range.
+  // Id dedup, not the window, is what prevents repeats.
   function pollEvents() {
-    if (!config.alerts.enabled || !config.frigate.url || eventsProcess.running) return
-    eventsProcess.command = frigateCommand("/api/events?limit=20&after=" + lastEventTime)
-    eventsProcess.running = true
+    if (!config.alerts.enabled || !config.frigate.url) return
+    var after = Math.max(0, lastEventTime - 120)
+    if (!liveEventsProcess.running) {
+      liveEventsProcess.command =
+        frigateCommand("/api/events?limit=20&in_progress=1&after=" + after)
+      liveEventsProcess.running = true
+    }
+    if (!eventsProcess.running) {
+      eventsProcess.command = frigateCommand("/api/events?limit=20&after=" + after)
+      eventsProcess.running = true
+    }
   }
 
   function applyEvents(raw) {
-    var result = Cameras.newEvents(raw, lastEventTime, config.alerts.labels)
-    var firstRun = lastEventTime === 0
-    if (result.after > lastEventTime) {
-      lastEventTime = result.after
+    var result = Cameras.newEvents(raw, config.alerts.labels, seenEvents)
+
+    // Mark every id in the payload, matching or not, so the next poll can skip
+    // the whole batch instead of re-examining it.
+    var ids = Cameras.eventIds(raw)
+    var seen = seenEvents
+    for (var i = 0; i < ids.length; i++) seen[ids[i].id] = ids[i].startTime
+
+    if (result.newest > lastEventTime) {
+      lastEventTime = result.newest
       stateFile.setText(String(lastEventTime) + "\n")
     }
-    // The first poll after a cold start has no watermark, so everything
-    // Frigate still remembers looks new. Adopt the watermark, show nothing.
-    if (firstRun || result.events.length === 0) return
+    seenEvents = Cameras.pruneSeen(seen, lastEventTime - 600)
 
+    if (syncRemaining > 0) {
+      syncRemaining--
+      return
+    }
     // Oldest first, so a burst stacks in the order it happened: the first
     // detection sits at the top and later ones appear underneath it.
-    for (var i = 0; i < result.events.length; i++) pushAlert(result.events[i])
+    for (var j = 0; j < result.events.length; j++) pushAlert(result.events[j])
   }
 
   function pushAlert(event) {
@@ -441,6 +472,9 @@ Item {
     running: root.config.alerts.enabled && root.config.frigate.url !== ""
     repeat: true
     triggeredOnStart: true
+    // Arming alerts starts a fresh sync, so whatever happened while they were
+    // off stays off the screen.
+    onRunningChanged: if (running) root.syncRemaining = 2
     onTriggered: root.pollEvents()
   }
 
@@ -471,6 +505,17 @@ Item {
       id: eventsStdout
       waitForEnd: true
       onStreamFinished: root.applyEvents(eventsStdout.text)
+    }
+  }
+
+  // Detections still in progress. Same handler: dedup is by id, so an event
+  // arriving here and then again from eventsProcess only ever alerts once.
+  Process {
+    id: liveEventsProcess
+    stdout: StdioCollector {
+      id: liveEventsStdout
+      waitForEnd: true
+      onStreamFinished: root.applyEvents(liveEventsStdout.text)
     }
   }
 

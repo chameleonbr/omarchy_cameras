@@ -46,32 +46,61 @@ assert.equal(parseConfig('{"alerts":{"enabled":"yes"}}').alerts.enabled, false,
 // --- newEvents -------------------------------------------------------------
 
 const events = JSON.stringify([
-  { id: "c", camera: "garagem", label: "person", start_time: 300 },
-  { id: "b", camera: "quintal", label: "cat", start_time: 200 },
-  { id: "a", camera: "garagem", label: "person", start_time: 100 }
+  { id: "c", camera: "garagem", label: "person", start_time: 300, end_time: 305 },
+  { id: "b", camera: "quintal", label: "cat", start_time: 200, end_time: 210 },
+  { id: "a", camera: "garagem", label: "person", start_time: 100, end_time: 150 }
 ])
 
-let seen = newEvents(events, 0, ["person"])
-assert.deepEqual(seen.events.map(e => e.id), ["a", "c"], "oldest first, cat filtered out")
-assert.equal(seen.after, 300, "the watermark passes every event, not just matching ones")
+let first = newEvents(events, ["person"], {})
+assert.deepEqual(first.events.map(e => e.id), ["a", "c"], "oldest first, cat filtered out")
+assert.equal(first.newest, 300, "newest spans every event, not just matching ones")
 
-// The watermark is what stops one detection alerting forever.
-assert.deepEqual(newEvents(events, 300, ["person"]).events, [])
-assert.deepEqual(newEvents(events, 100, ["person"]).events.map(e => e.id), ["c"])
+// Dedup is by id. The same detection is reported twice — once running, once
+// ended — with the same id and start_time, so a timestamp alone is not enough.
+assert.deepEqual(newEvents(events, ["person"], { a: 100, c: 300 }).events, [])
+assert.deepEqual(newEvents(events, ["person"], { a: 100 }).events.map(e => e.id), ["c"])
 
-// A label the user did not ask for still advances the watermark, or an
-// unwatched camera would keep re-delivering the events behind it.
-assert.equal(newEvents(events, 0, ["nothing"]).after, 300)
-assert.deepEqual(newEvents(events, 0, ["nothing"]).events, [])
+// An in-progress event has no end_time and must still alert — waiting for one
+// means waiting for the subject to leave the frame.
+const live = '[{"id":"L","camera":"garagem","label":"person","start_time":400,"end_time":null}]'
+assert.equal(newEvents(live, ["person"], {}).events[0].inProgress, true)
+assert.equal(newEvents(events, ["person"], {}).events[0].inProgress, false)
 
-assert.equal(newEvents("<html>502</html>", 42, ["person"]).after, 42,
-  "an error page must not reset the watermark")
-assert.deepEqual(newEvents("", 0, ["person"]).events, [])
+// A shorter event that started earlier must not be swallowed by a long-running
+// one — the bug a timestamp watermark would have introduced.
+const overlapping = JSON.stringify([
+  { id: "long", camera: "a", label: "person", start_time: 500, end_time: null },
+  { id: "short", camera: "b", label: "person", start_time: 480, end_time: 495 }
+])
+assert.deepEqual(newEvents(overlapping, ["person"], { long: 500 }).events.map(e => e.id),
+  ["short"])
+
+assert.deepEqual(newEvents(events, ["nothing"], {}).events, [])
+assert.equal(newEvents(events, ["nothing"], {}).newest, 300,
+  "an unwatched label still moves the query window forward")
+
+assert.deepEqual(newEvents("<html>502</html>", ["person"], {}).events, [])
+assert.equal(newEvents("<html>502</html>", ["person"], {}).newest, 0,
+  "an error page reports no newest, so the caller keeps its own watermark")
+assert.deepEqual(newEvents("", ["person"], {}).events, [])
 assert.deepEqual(
-  newEvents('[{"camera":"x","label":"person"}]', 0, ["person"]).events, [],
-  "an event with no start_time cannot be de-duplicated, so it is skipped")
-assert.deepEqual(newEvents(events, 0, ["PERSON"]).events.map(e => e.id), ["a", "c"],
+  newEvents('[{"id":"x","camera":"x","label":"person"}]', ["person"], {}).events, [],
+  "no start_time means nothing to age the id out by, so it is skipped")
+assert.deepEqual(
+  newEvents('[{"camera":"x","label":"person","start_time":1}]', ["person"], {}).events, [],
+  "no id means no way to tell two detections apart, so it is skipped")
+assert.deepEqual(newEvents(events, ["PERSON"], {}).events.map(e => e.id), ["a", "c"],
   "label matching is case-insensitive")
+
+// --- eventIds / pruneSeen --------------------------------------------------
+
+assert.deepEqual(eventIds(events).map(e => e.id), ["c", "b", "a"],
+  "every id, so a non-matching event is not re-examined next poll")
+assert.deepEqual(eventIds("nonsense"), [])
+
+assert.deepEqual(pruneSeen({ a: 100, b: 200, c: 300 }, 200), { b: 200, c: 300 },
+  "ids too old to come back in the query window are dropped")
+assert.deepEqual(pruneSeen({}, 0), {})
 
 // --- eventImageUrl ---------------------------------------------------------
 //
@@ -92,11 +121,11 @@ assert.equal(eventImageUrl("http://nvr.lan:5000", null), "")
 assert.equal(eventImageUrl("http://nvr.lan:5000", { hasSnapshot: true }), "",
   "no id means no URL to build")
 
-assert.equal(newEvents(events, 0, ["person"]).events[0].hasSnapshot, false,
+assert.equal(newEvents(events, ["person"], {}).events[0].hasSnapshot, false,
   "has_snapshot absent is not a snapshot")
 assert.equal(
   newEvents('[{"id":"z","camera":"c","label":"person","start_time":9,"has_snapshot":true}]',
-    0, ["person"]).events[0].hasSnapshot,
+    ["person"], {}).events[0].hasSnapshot,
   true)
 
 // --- hostOf ----------------------------------------------------------------

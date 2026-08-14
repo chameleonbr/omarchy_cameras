@@ -177,10 +177,20 @@ to `http://<frigate>/api/<name>` (Frigate's MJPEG of the detect feed) for the
 rest. Asking `:8554` for a camera go2rtc never heard of yields a dead window,
 and on a typical install most cameras are not restreamed.
 
-Events are keyed on `start_time`, and the watermark persists to
-`~/.local/state/omarchy/cameras-last-event`. `newEvents` advances the watermark
-past **every** event it sees, not just matching ones — otherwise an unwatched
-label would keep re-delivering the events behind it.
+**`/api/events` returns only events that have already ended.** Live ones come
+from `/api/events?in_progress=1` and carry `end_time: null`. The poller hits
+both, or every alert waits for the subject to leave the frame. Both replies go
+through the same `applyEvents`.
+
+That makes **id** the dedup key, not a timestamp: one detection is reported
+twice, running then ended, with the same id and `start_time`. A timestamp
+watermark would also let a long-running event advance the mark past a shorter
+one that started earlier on another camera and swallow it. `lastEventTime`
+survives only to bound the query window (`after = newest - 120`);
+`seenEvents` (id → start_time, pruned at `newest - 600`) is what prevents
+repeats. `syncRemaining` starts at 2 so the first reply from *each* query is a
+sync that shows nothing — one counter would let the second query replay the
+backlog.
 
 ## Credentials
 
