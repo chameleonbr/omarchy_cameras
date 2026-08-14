@@ -31,6 +31,24 @@ isn't there just yields a dead window.
 To upgrade a camera, add it to `go2rtc:` in Frigate's config — nothing changes
 here, the plugin picks it up on the next refresh.
 
+### Motion alerts
+
+Off by default. Once armed, the plugin polls Frigate's events every 5s and pops
+a small live preview of whichever camera tripped — sized, timed, and placed
+where you tell it, on the monitor you tell it. Clicking the preview opens that
+camera full size; otherwise it disappears on its own.
+
+Everything about it is a setting in **Config → Motion alerts**: on/off, which
+labels count, which monitor, which corner (top-center sits by the clock),
+seconds on screen, and preview width. **Middle-click the bar icon** to arm or
+disarm without opening anything; the icon paints in the accent color while
+alerts are armed.
+
+The newest event's timestamp is kept in
+`~/.local/state/omarchy/cameras-last-event`, so restarting the shell does not
+replay the day's detections as a burst of previews. The very first poll after
+that file is gone adopts the current timestamp and shows nothing.
+
 ### The viewer window
 
 It is a plain floating `mpv`, which Omarchy already centers at 875x600. Not
@@ -90,6 +108,14 @@ where ONVIF discovery writes its results.
     "rtspPort": 8554
   },
   "notifyLabels": ["person"],
+  "alerts": {
+    "enabled": false,
+    "labels": ["person"],
+    "monitor": "",
+    "position": "top-center",
+    "durationSec": 12,
+    "width": 320
+  },
   "onvif": []
 }
 ```
@@ -101,6 +127,9 @@ where ONVIF discovery writes its results.
   Frigate's connection to the camera is the only one.
 - `onvif[]` — written by `omarchy-cameras-onvif discover`. Hand-editing is
   fine: `{"name": …, "rtsp": …, "ptz": true|false, "xaddr": …}`.
+- `alerts` — see Motion alerts above. `monitor` is a connector name as the
+  compositor reports it (`DP-1`, `HDMI-A-1`); empty means the first screen.
+  `labels` falls back to `notifyLabels` when it is absent or empty.
 
 The file is watched, so edits apply without a restart.
 
@@ -124,6 +153,7 @@ Over IPC, for keybinds:
 ```bash
 omarchy-shell shell toggle avila.cameras '{}'   # grid, on the focused monitor
 omarchy-shell avila.cameras view garagem        # straight to one camera
+omarchy-shell avila.cameras alerts on           # or off; "" just reports
 omarchy-shell avila.cameras status
 ```
 
@@ -168,6 +198,8 @@ quickshell log -p $OMARCHY_PATH/shell -t 200 | grep -i avila
 |------|------|
 | `Service.qml` | camera registry and every write to cameras.json; one instance per shell, shared by every monitor's bar |
 | `Panel.qml` | bar widget, popup grid, and the config form |
-| `Cameras.js` | source merging, stream selection, URL building — pure functions, no QML |
+| `CameraThumb.qml` | double-buffered thumbnail; swaps frames only once the next one has loaded, so a polled JPEG does not blink |
+| `Alert.qml` | the motion-alert preview window, owned by the service |
+| `Cameras.js` | source merging, stream selection, event filtering, URL building — pure functions, no QML |
 | `bin/omarchy-cameras-onvif` | WS-Discovery, stream lookup, keyring — stdlib Python |
 | `bin/omarchy-cameras-view` | the mpv launcher |

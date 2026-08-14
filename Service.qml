@@ -24,6 +24,15 @@ Item {
   property bool loading: false
   property string lastError: ""
 
+  // Event alerts. `alertCamera` non-null is what puts the preview on screen.
+  property var alertCamera: null
+  property string alertLabel: ""
+  // Newest Frigate event start_time already handled, persisted so a shell
+  // restart does not replay the day's detections as a burst of previews.
+  property real lastEventTime: 0
+  readonly property string statePath:
+    home + "/.local/state/omarchy/cameras-last-event"
+
   // ONVIF discovery state, driven from the config screen.
   property bool discovering: false
   property var discovered: []
@@ -76,6 +85,7 @@ Item {
     var next = {
       frigate: { url: config.frigate.url, rtspPort: config.frigate.rtspPort },
       notifyLabels: config.notifyLabels.slice(),
+      alerts: config.alerts,
       onvif: config.onvif.slice()
     }
     for (var key in patch) next[key] = patch[key]
@@ -140,6 +150,57 @@ Item {
     }
     probeError = ""
     saveConfig({ onvif: Cameras.upsertOnvif(config, parsed.camera) })
+  }
+
+  // -------------------------------------------------------------- alerts
+
+  function setAlertsEnabled(enabled) {
+    var alerts = {}
+    for (var key in config.alerts) alerts[key] = config.alerts[key]
+    alerts.enabled = enabled === true
+    saveConfig({ alerts: alerts })
+  }
+
+  function saveAlerts(patch) {
+    var alerts = {}
+    for (var key in config.alerts) alerts[key] = config.alerts[key]
+    for (var field in patch) alerts[field] = patch[field]
+    saveConfig({ alerts: alerts })
+  }
+
+  function pollEvents() {
+    if (!config.alerts.enabled || !config.frigate.url || eventsProcess.running) return
+    eventsProcess.command = ["curl", "-fsS", "--max-time", "5",
+      config.frigate.url + "/api/events?limit=20&after=" + lastEventTime]
+    eventsProcess.running = true
+  }
+
+  function applyEvents(raw) {
+    var result = Cameras.newEvents(raw, lastEventTime, config.alerts.labels)
+    var firstRun = lastEventTime === 0
+    if (result.after > lastEventTime) {
+      lastEventTime = result.after
+      stateFile.setText(String(lastEventTime) + "\n")
+    }
+    // The first poll after a cold start has no watermark, so everything
+    // Frigate still remembers looks new. Adopt the watermark, show nothing.
+    if (firstRun || result.events.length === 0) return
+
+    var latest = result.events[result.events.length - 1]
+    var camera = null
+    for (var i = 0; i < cameras.length; i++) {
+      if (cameras[i].name === latest.camera) { camera = cameras[i]; break }
+    }
+    if (!camera) return
+    alertLabel = latest.label
+    alertCamera = camera
+    alertTimer.restart()
+  }
+
+  function dismissAlert() {
+    alertTimer.stop()
+    alertCamera = null
+    alertLabel = ""
   }
 
   // ------------------------------------------------------------- frigate
@@ -219,5 +280,63 @@ Item {
     running: root.config.frigate.url !== ""
     repeat: true
     onTriggered: root.fetchFrigateConfig()
+  }
+
+  // ponytail: polling, not MQTT. No mosquitto client is installed, and five
+  // seconds of lag on a doorway preview is not worth a dependency. Swap in
+  // mosquitto_sub if sub-second alerts ever matter.
+  Timer {
+    interval: 5000
+    running: root.config.alerts.enabled && root.config.frigate.url !== ""
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.pollEvents()
+  }
+
+  Process {
+    id: eventsProcess
+    stdout: StdioCollector {
+      id: eventsStdout
+      waitForEnd: true
+      onStreamFinished: root.applyEvents(eventsStdout.text)
+    }
+  }
+
+  FileView {
+    id: stateFile
+    path: root.statePath
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.lastEventTime = Number(text()) || 0
+    onLoadFailed: root.lastEventTime = 0
+  }
+
+  Timer {
+    id: alertTimer
+    interval: root.config.alerts.durationSec * 1000
+    onTriggered: root.dismissAlert()
+  }
+
+  // One preview window, on the monitor the user picked. Quickshell.screens is
+  // the authority on what exists; a monitor that has been unplugged since the
+  // setting was saved falls back to the first one rather than showing nothing.
+  Alert {
+    screen: {
+      var wanted = root.config.alerts.monitor
+      var screens = Quickshell.screens
+      for (var i = 0; i < screens.length; i++) {
+        if (screens[i].name === wanted) return screens[i]
+      }
+      return screens.length > 0 ? screens[0] : null
+    }
+    camera: root.alertCamera
+    label: root.alertLabel
+    previewWidth: root.config.alerts.width
+    position: root.config.alerts.position
+    onActivated: {
+      var camera = root.alertCamera
+      root.dismissAlert()
+      if (camera) root.view(camera.id)
+    }
   }
 }

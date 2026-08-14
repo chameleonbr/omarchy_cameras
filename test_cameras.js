@@ -26,6 +26,53 @@ assert.equal(parseConfig('{"frigate":{"rtspPort":"1935"}}').frigate.rtspPort, 19
 assert.equal(parseConfig('{"frigate":{"rtspPort":0}}').frigate.rtspPort, 8554,
   "out-of-range port falls back")
 
+// --- alert settings --------------------------------------------------------
+
+assert.equal(empty.alerts.enabled, false, "alerts must be opt-in")
+assert.deepEqual(empty.alerts.labels, ["person"], "labels default to notifyLabels")
+assert.equal(parseConfig('{"notifyLabels":["cat","dog"]}').alerts.labels.length, 2,
+  "an alerts block is not required to pick up notifyLabels")
+assert.deepEqual(
+  parseConfig('{"notifyLabels":["cat"],"alerts":{"labels":["car"]}}').alerts.labels,
+  ["car"], "an explicit alerts.labels wins over notifyLabels")
+assert.equal(parseConfig('{"alerts":{"durationSec":9000}}').alerts.durationSec, 300,
+  "duration is clamped, not trusted")
+assert.equal(parseConfig('{"alerts":{"width":10}}').alerts.width, 120)
+assert.equal(parseConfig('{"alerts":{"position":"middle"}}').alerts.position, "top-center",
+  "an unknown corner falls back rather than anchoring nowhere")
+assert.equal(parseConfig('{"alerts":{"enabled":"yes"}}').alerts.enabled, false,
+  "only a real boolean arms the alerts")
+
+// --- newEvents -------------------------------------------------------------
+
+const events = JSON.stringify([
+  { id: "c", camera: "garagem", label: "person", start_time: 300 },
+  { id: "b", camera: "quintal", label: "cat", start_time: 200 },
+  { id: "a", camera: "garagem", label: "person", start_time: 100 }
+])
+
+let seen = newEvents(events, 0, ["person"])
+assert.deepEqual(seen.events.map(e => e.id), ["a", "c"], "oldest first, cat filtered out")
+assert.equal(seen.after, 300, "the watermark passes every event, not just matching ones")
+
+// The watermark is what stops one detection alerting forever.
+assert.deepEqual(newEvents(events, 300, ["person"]).events, [])
+assert.deepEqual(newEvents(events, 100, ["person"]).events.map(e => e.id), ["c"])
+
+// A label the user did not ask for still advances the watermark, or an
+// unwatched camera would keep re-delivering the events behind it.
+assert.equal(newEvents(events, 0, ["nothing"]).after, 300)
+assert.deepEqual(newEvents(events, 0, ["nothing"]).events, [])
+
+assert.equal(newEvents("<html>502</html>", 42, ["person"]).after, 42,
+  "an error page must not reset the watermark")
+assert.deepEqual(newEvents("", 0, ["person"]).events, [])
+assert.deepEqual(
+  newEvents('[{"camera":"x","label":"person"}]', 0, ["person"]).events, [],
+  "an event with no start_time cannot be de-duplicated, so it is skipped")
+assert.deepEqual(newEvents(events, 0, ["PERSON"]).events.map(e => e.id), ["a", "c"],
+  "label matching is case-insensitive")
+
 // --- hostOf ----------------------------------------------------------------
 
 assert.equal(hostOf("http://nvr.lan:5000"), "nvr.lan")

@@ -7,8 +7,18 @@
 var DEFAULT_CONFIG = {
   frigate: { url: "", rtspPort: 8554 },
   notifyLabels: ["person"],
+  alerts: {
+    enabled: false,
+    labels: [],          // empty means "fall back to notifyLabels"
+    monitor: "",         // empty means "wherever the bar widget last was"
+    position: "top-center",
+    durationSec: 12,
+    width: 320
+  },
   onvif: []
 }
+
+var ALERT_POSITIONS = ["top-left", "top-center", "top-right"]
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -35,6 +45,8 @@ function parseConfig(raw) {
 
   var frigate = isObject(parsed.frigate) ? parsed.frigate : {}
   var port = parseInt(frigate.rtspPort, 10)
+  var notifyLabels = Array.isArray(parsed.notifyLabels)
+    ? parsed.notifyLabels.map(String) : DEFAULT_CONFIG.notifyLabels.slice()
 
   return {
     frigate: {
@@ -42,10 +54,68 @@ function parseConfig(raw) {
       rtspPort: isFinite(port) && port > 0 && port < 65536
         ? port : DEFAULT_CONFIG.frigate.rtspPort
     },
-    notifyLabels: Array.isArray(parsed.notifyLabels)
-      ? parsed.notifyLabels.map(String) : DEFAULT_CONFIG.notifyLabels.slice(),
+    notifyLabels: notifyLabels,
+    alerts: parseAlerts(parsed.alerts, notifyLabels),
     onvif: Array.isArray(parsed.onvif) ? parsed.onvif.filter(isObject) : []
   }
+}
+
+function clampInt(value, fallback, min, max) {
+  var n = parseInt(value, 10)
+  if (!isFinite(n)) return fallback
+  return Math.max(min, Math.min(max, n))
+}
+
+function parseAlerts(raw, notifyLabels) {
+  var alerts = isObject(raw) ? raw : {}
+  var labels = Array.isArray(alerts.labels) && alerts.labels.length
+    ? alerts.labels.map(String) : notifyLabels.slice()
+  var position = String(alerts.position || DEFAULT_CONFIG.alerts.position)
+  return {
+    enabled: alerts.enabled === true,
+    labels: labels,
+    monitor: String(alerts.monitor || ""),
+    position: ALERT_POSITIONS.indexOf(position) === -1
+      ? DEFAULT_CONFIG.alerts.position : position,
+    // Long enough to see what tripped it, short enough that a busy driveway
+    // does not leave a window parked on the desktop.
+    durationSec: clampInt(alerts.durationSec, DEFAULT_CONFIG.alerts.durationSec, 2, 300),
+    width: clampInt(alerts.width, DEFAULT_CONFIG.alerts.width, 120, 960)
+  }
+}
+
+// New Frigate events worth alerting on, newest last.
+//
+// `after` is both the query Frigate was given and the watermark this returns:
+// events are keyed on start_time, so advancing past the newest one seen is
+// what stops the same detection alerting twice. A restart that loses the
+// watermark must not replay history, so callers persist it.
+function newEvents(raw, after, labels) {
+  var parsed = null
+  try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
+  if (!Array.isArray(parsed)) return { events: [], after: after }
+
+  var wanted = {}
+  for (var i = 0; i < labels.length; i++) wanted[String(labels[i]).toLowerCase()] = true
+
+  var out = []
+  var watermark = after
+  for (var j = 0; j < parsed.length; j++) {
+    var event = parsed[j]
+    if (!isObject(event)) continue
+    var start = Number(event.start_time)
+    if (!isFinite(start) || start <= after) continue
+    if (start > watermark) watermark = start
+    if (!wanted[String(event.label || "").toLowerCase()]) continue
+    out.push({
+      id: String(event.id || ""),
+      camera: String(event.camera || ""),
+      label: String(event.label || ""),
+      startTime: start
+    })
+  }
+  out.sort(function(a, b) { return a.startTime - b.startTime })
+  return { events: out, after: watermark }
 }
 
 // Cameras out of Frigate's /api/config. Frigate already renders a JPEG per

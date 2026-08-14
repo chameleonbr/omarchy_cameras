@@ -25,6 +25,7 @@ Panel {
     ? bar.shell.serviceFor(root.moduleName) : null
   readonly property var cameras: service ? service.cameras : []
   readonly property bool hasCameras: cameras.length > 0
+  readonly property bool alertsOn: service ? service.config.alerts.enabled : false
 
   // "grid" or "config".
   property string view: "grid"
@@ -40,6 +41,17 @@ Panel {
   readonly property int tileHeight: Math.round(tileWidth * 9 / 16)
   readonly property int tileSpacing: Style.space(8)
   readonly property int gridWidth: columns * tileWidth + (columns - 1) * tileSpacing
+
+  // Monitors to choose from for the alert preview, straight off the
+  // compositor so an unplugged display disappears from the list.
+  readonly property var monitorOptions: {
+    var out = [{ value: "", label: "First available" }]
+    var screens = Quickshell.screens
+    for (var i = 0; i < screens.length; i++) {
+      out.push({ value: screens[i].name, label: screens[i].name })
+    }
+    return out
+  }
 
   property int cursor: 0
   property bool cursorActive: false
@@ -74,6 +86,8 @@ Panel {
     if (service) {
       urlField.text = service.config.frigate.url
       portField.text = String(service.config.frigate.rtspPort)
+      durationField.text = String(service.config.alerts.durationSec)
+      alertWidthField.text = String(service.config.alerts.width)
     }
     // Land the cursor in the first field. The panel is keyboard-summoned as
     // often as it is clicked, and a form you have to reach for with the mouse
@@ -161,6 +175,13 @@ Panel {
       root.service.setFrigate(url, parseInt(rtspPort, 10) || 8554)
       return "ok"
     }
+    function alerts(state: string): string {
+      if (!root.service) return "service unavailable"
+      if (state === "on" || state === "off") {
+        root.service.setAlertsEnabled(state === "on")
+      }
+      return root.alertsOn ? "on" : "off"
+    }
   }
 
   WidgetButton {
@@ -169,11 +190,17 @@ Panel {
     bar: root.bar
     text: "󰞮"
     dimmed: !root.hasCameras
-    tooltipText: root.hasCameras
+    // Alerts on is the state worth marking: it is the one that makes windows
+    // appear on their own, and the user needs to see at a glance that it is
+    // armed.
+    active: root.alertsOn
+    tooltipText: (root.hasCameras
       ? root.cameras.length + (root.cameras.length === 1 ? " camera" : " cameras")
-      : "No cameras configured"
+      : "No cameras configured")
+      + (root.alertsOn ? "  ·  alerts on" : "")
     onPressed: function(code) {
       if (code === Qt.RightButton && root.service) root.service.refresh()
+      else if (code === Qt.MiddleButton && root.service) root.service.setAlertsEnabled(!root.alertsOn)
       else root.toggle()
     }
   }
@@ -295,15 +322,12 @@ Panel {
                   clip: true
                   color: Qt.darker(Color.popups.background, 1.3)
 
-                  Image {
+                  CameraThumb {
                     id: thumb
                     anchors.fill: parent
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
-                    // Every refresh is a distinct URL, so caching a frame
-                    // would only pin the first one forever.
-                    cache: false
-                    source: Cameras.thumbSource(tile.modelData, root.tick)
+                    camera: tile.modelData
+                    tick: root.tick
+                    active: root.opened && root.view === "grid"
                   }
 
                   // Covers both "still loading" and "camera is down" — either
@@ -311,7 +335,7 @@ Panel {
                   // the tile.
                   Text {
                     anchors.centerIn: parent
-                    visible: thumb.status !== Image.Ready
+                    visible: !thumb.hasFrame
                     text: "󰞮"
                     color: root.dim
                     font.family: root.fontFamily
@@ -404,6 +428,96 @@ Panel {
               font.pixelSize: Style.font.caption
               text: "Leave blank to run ONVIF-only. Cameras come from Frigate's "
                 + "/api/config; the fullscreen view plays the go2rtc restream."
+            }
+
+            PanelSeparator { foreground: root.foreground }
+
+            PanelSectionHeader {
+              text: "Motion alerts"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Pop up a preview on detection"
+              description: root.service && !root.service.config.frigate.url
+                ? "Needs a Frigate URL" : "Frigate events only"
+              checked: root.service && root.service.config.alerts.enabled
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: if (root.service) root.service.setAlertsEnabled(!checked)
+            }
+
+            Dropdown {
+              width: parent.width
+              label: "Monitor"
+              value: root.service ? root.service.config.alerts.monitor : ""
+              options: root.monitorOptions
+              fontFamily: root.fontFamily
+              onChanged: function(v) { if (root.service) root.service.saveAlerts({ monitor: v }) }
+            }
+
+            Dropdown {
+              width: parent.width
+              label: "Corner"
+              value: root.service ? root.service.config.alerts.position : "top-center"
+              options: [
+                { value: "top-left", label: "Top left" },
+                { value: "top-center", label: "Top center (by the clock)" },
+                { value: "top-right", label: "Top right" }
+              ]
+              fontFamily: root.fontFamily
+              onChanged: function(v) { if (root.service) root.service.saveAlerts({ position: v }) }
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              TextField {
+                id: durationField
+                width: Style.space(90)
+                placeholderText: "seconds"
+                foreground: root.foreground
+                inputMethodHints: Qt.ImhDigitsOnly
+                validator: IntValidator { bottom: 2; top: 300 }
+                onAccepted: saveAlertSizing.clicked()
+              }
+
+              TextField {
+                id: alertWidthField
+                width: Style.space(90)
+                placeholderText: "width px"
+                foreground: root.foreground
+                inputMethodHints: Qt.ImhDigitsOnly
+                validator: IntValidator { bottom: 120; top: 960 }
+                onAccepted: saveAlertSizing.clicked()
+              }
+
+              Button {
+                id: saveAlertSizing
+                text: "Save"
+                bordered: true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: if (root.service) {
+                  root.service.saveAlerts({
+                    durationSec: parseInt(durationField.text, 10) || 12,
+                    width: parseInt(alertWidthField.text, 10) || 320
+                  })
+                }
+              }
+            }
+
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              text: "Seconds on screen, and preview width in pixels. Middle-click "
+                + "the bar icon to switch alerts off without opening this."
             }
 
             PanelSeparator { foreground: root.foreground }
