@@ -2,7 +2,8 @@
 //
 // Loaded once per shell session (kind: "service"), so the bar widget — which
 // the shell instantiates once per monitor — can read one shared camera list
-// instead of each copy polling Frigate on its own.
+// instead of each copy polling Frigate on its own. It also owns every write
+// to cameras.json, so the config screen never has two writers racing.
 
 import QtQuick
 import Quickshell
@@ -17,14 +18,21 @@ Item {
   readonly property string runtimeDir:
     (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarchy-cameras"
 
-  // Parsed cameras.json. Also the ONVIF discovery cache — see
-  // bin/omarchy-cameras-onvif.
+  // Parsed cameras.json. Also the ONVIF discovery cache.
   property var config: Cameras.parseConfig("")
   property var cameras: []
   property bool loading: false
   property string lastError: ""
 
+  // ONVIF discovery state, driven from the config screen.
+  property bool discovering: false
+  property var discovered: []
+  property string discoverError: ""
+  property string probing: ""
+  property string probeError: ""
+
   readonly property string viewScript: scriptPath("bin/omarchy-cameras-view")
+  readonly property string onvifScript: scriptPath("bin/omarchy-cameras-onvif")
 
   function scriptPath(relative) {
     return decodeURIComponent(
@@ -43,7 +51,7 @@ Item {
   function view(id) {
     var camera = cameraById(id)
     if (!camera) return
-    Quickshell.execDetached([viewScript, camera.name, camera.stream])
+    Quickshell.execDetached([viewScript, camera.name, camera.stream, camera.user || ""])
   }
 
   function refresh() {
@@ -58,6 +66,83 @@ Item {
           Cameras.frigateCameras(frigateStdout.text, config.frigate), onvif)
       : onvif
   }
+
+  // ------------------------------------------------------------- writing
+
+  // Read-modify-write of cameras.json. The FileView is watched, so the write
+  // comes back through onLoaded and rebuilds the camera list — there is no
+  // second code path for "config we just saved".
+  function saveConfig(patch) {
+    var next = {
+      frigate: { url: config.frigate.url, rtspPort: config.frigate.rtspPort },
+      notifyLabels: config.notifyLabels.slice(),
+      onvif: config.onvif.slice()
+    }
+    for (var key in patch) next[key] = patch[key]
+    configFile.setText(JSON.stringify(next, null, 2) + "\n")
+    config = Cameras.parseConfig(JSON.stringify(next))
+  }
+
+  function setFrigate(url, port) {
+    saveConfig({ frigate: { url: String(url || "").trim(), rtspPort: port } })
+  }
+
+  function removeOnvif(name) {
+    saveConfig({
+      onvif: config.onvif.filter(function(entry) { return entry.name !== name })
+    })
+  }
+
+  // ----------------------------------------------------------- discovery
+
+  function discover() {
+    if (discovering) return
+    discovering = true
+    discoverError = ""
+    discovered = []
+    discoverStdout.text = ""
+    discoverProcess.command = [onvifScript, "discover", "--timeout", "3"]
+    discoverProcess.running = true
+  }
+
+  function applyDiscovery(raw) {
+    var parsed = null
+    try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
+    if (!parsed || !Array.isArray(parsed.devices)) {
+      discoverError = "Discovery returned nothing readable"
+      discovered = []
+      return
+    }
+    discovered = parsed.devices
+    // An empty result is a real answer, not a failure — say which one it is.
+    discoverError = parsed.devices.length === 0
+      ? "No ONVIF cameras answered on this network" : ""
+  }
+
+  // Ask one discovered device for its stream URL and add it to the config.
+  // The password goes over stdin, never argv.
+  function probeDevice(xaddr, user, password) {
+    if (probing) return
+    probing = xaddr
+    probeError = ""
+    probeStdout.text = ""
+    probeProcess.secret = password
+    probeProcess.command = [onvifScript, "probe", xaddr, "--user", user]
+    probeProcess.running = true
+  }
+
+  function applyProbe(raw) {
+    var parsed = null
+    try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
+    if (!parsed || !parsed.camera) {
+      probeError = parsed && parsed.error ? parsed.error : "Camera did not answer"
+      return
+    }
+    probeError = ""
+    saveConfig({ onvif: Cameras.upsertOnvif(config, parsed.camera) })
+  }
+
+  // ------------------------------------------------------------- frigate
 
   function fetchFrigateConfig() {
     if (!config.frigate.url || frigateProcess.running) return
@@ -76,6 +161,7 @@ Item {
     id: configFile
     path: root.configPath
     watchChanges: true
+    atomicWrites: true
     // Absent config is the normal first-run state, not something to log about.
     printErrors: false
     onFileChanged: reload()
@@ -99,6 +185,30 @@ Item {
       root.loading = false
       root.lastError = code === 0
         ? "" : "Frigate unreachable at " + root.config.frigate.url
+    }
+  }
+
+  Process {
+    id: discoverProcess
+    stdout: StdioCollector { id: discoverStdout; waitForEnd: true }
+    onExited: {
+      root.discovering = false
+      root.applyDiscovery(discoverStdout.text)
+    }
+  }
+
+  Process {
+    id: probeProcess
+    property string secret: ""
+    stdinEnabled: true
+    stdout: StdioCollector { id: probeStdout; waitForEnd: true }
+    onStarted: {
+      write(secret + "\n")
+      secret = ""
+    }
+    onExited: {
+      root.probing = ""
+      root.applyProbe(probeStdout.text)
     }
   }
 

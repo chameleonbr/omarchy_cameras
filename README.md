@@ -13,10 +13,42 @@ Hyprland window. This plugin uses each where it is good:
 | Layer | What | Where |
 |-------|------|-------|
 | 1 — thumbnails | a JPEG per camera, refreshed every ~2s | inside the shell, in the popup grid |
-| 2 — focused view | the real stream, hardware decoded | an `mpv --fs` window |
+| 2 — focused view | the real stream, hardware decoded | a floating `mpv` window |
 
 Nobody watches nine streams at once. Decoding nine of them to fill 170px tiles
 would spend a lot of CPU on pictures too small to read.
+
+### Which stream a camera plays
+
+Frigate only restreams the cameras listed under `go2rtc:` in its own config.
+For those, the viewer plays `rtsp://<frigate-host>:8554/<camera>` — the good
+path: the codec passes through untouched and Frigate keeps the only connection
+to the camera. For every other camera it plays `http://<frigate>/api/<camera>`,
+Frigate's MJPEG of the detect feed: heavier on the wire and softer, but it
+exists for every camera with no configuration. Asking for a restream that
+isn't there just yields a dead window.
+
+To upgrade a camera, add it to `go2rtc:` in Frigate's config — nothing changes
+here, the plugin picks it up on the next refresh.
+
+### The viewer window
+
+It is a plain floating `mpv`, which Omarchy already centers at 875x600. Not
+fullscreen, on purpose: Omarchy's rule for class `mpv` and mpv's own `--fs`
+fight each other, and every change in the video stream re-triggers the fight,
+so the window flips back to fullscreen whenever something moves in frame.
+
+For a window parked in a corner instead of centered, add a rule of your own —
+the viewer titles its windows `omarchy-cameras: <name>`:
+
+```lua
+-- ~/.config/hypr/apps/cameras.lua
+o.window({ class = "mpv", title = "^omarchy-cameras:" }, {
+  float = true,
+  size = { 640, 360 },
+  move = { "(monitor_w-680)", 60 },
+})
+```
 
 ## Install
 
@@ -28,6 +60,22 @@ Then point it at your cameras (see below) and restart the shell once:
 
 ```bash
 omarchy restart shell
+```
+
+## Setup
+
+Click the CCTV icon in the bar and hit **Config** (a fresh install opens
+straight there). The form takes the Frigate URL, and finds ONVIF cameras on the
+local network with **Detect cameras** — fill in the camera credentials first,
+then **Add** each one you want. Everything it writes lands in
+`~/.config/omarchy/cameras.json`; ONVIF passwords go to the keyring instead,
+under `service=omarchy-cameras`.
+
+The same writes are available from a script:
+
+```bash
+omarchy-shell avila.cameras setFrigate http://nvr.lan:5000 8554
+omarchy-shell avila.cameras discover
 ```
 
 ## Configuration
@@ -103,7 +151,8 @@ real directory, hot-reloads on save.)
 Checks:
 
 ```bash
-node test_cameras.js   # camera-list parsing and merging
+node test_cameras.js   # camera-list parsing, stream selection, merging
+python3 test_onvif.py  # WS-Security digest, SOAP parsing, credential handling
 ```
 
 Plugin load failures surface as `console.warn` from the shell's
@@ -117,7 +166,8 @@ quickshell log -p $OMARCHY_PATH/shell -t 200 | grep -i avila
 
 | Path | Role |
 |------|------|
-| `Service.qml` | camera registry; one instance per shell, shared by every monitor's bar |
-| `Panel.qml` | bar widget and its popup grid |
-| `Cameras.js` | source merging and URL building — pure functions, no QML |
+| `Service.qml` | camera registry and every write to cameras.json; one instance per shell, shared by every monitor's bar |
+| `Panel.qml` | bar widget, popup grid, and the config form |
+| `Cameras.js` | source merging, stream selection, URL building — pure functions, no QML |
+| `bin/omarchy-cameras-onvif` | WS-Discovery, stream lookup, keyring — stdlib Python |
 | `bin/omarchy-cameras-view` | the mpv launcher |

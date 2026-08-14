@@ -3,23 +3,48 @@
 # window embedding, so the focused view is a real mpv window rather than
 # something painted inside omarchy-shell.
 #
-# Usage: omarchy-cameras-view <name> <stream-url>
+# Usage: omarchy-cameras-view <name> <stream-url> [onvif-user]
+#
+# With a user, the password is fetched from the keyring and spliced into the
+# URL here, so cameras.json never has to hold it.
 
 set -euo pipefail
 
-name="${1:?usage: omarchy-cameras-view <name> <stream-url>}"
-stream="${2:?usage: omarchy-cameras-view <name> <stream-url>}"
+name="${1:?usage: omarchy-cameras-view <name> <stream-url> [onvif-user]}"
+stream="${2:?usage: omarchy-cameras-view <name> <stream-url> [onvif-user]}"
+user="${3:-}"
+
+if [[ -n "$user" ]]; then
+  # Failure here is not fatal: an open camera still plays, and mpv reports the
+  # 401 far more clearly than this script could.
+  stream="$("$(dirname "$0")/omarchy-cameras-onvif" stream-url "$stream" --user "$user" 2>/dev/null || echo "$stream")"
+fi
 
 # --profile=low-latency drops mpv's buffering to near zero; without it an RTSP
 # feed sits seconds behind, which defeats the point of looking at a camera.
 # --rtsp-transport=tcp because UDP tears badly over Wi-Fi and most cameras
 # support both.
+#
+# No --fs, and the app id is left as plain `mpv` on purpose. Omarchy already
+# floats, centers and sizes class `mpv` at 875x600, which is the window this
+# wants; asking for fullscreen on top of that rule made the two fight, and
+# every change in the video stream re-triggered the fight and threw the window
+# back to fullscreen. See the README for a rule that parks it in a corner.
+#
+# --force-window=immediate maps the window before the first frame arrives.
+# Frigate's MJPEG endpoint can take several seconds to produce one, and
+# without this the click appears to do nothing until it does.
+#
+# --loop-file=inf reopens the stream instead of closing the window when the
+# feed drops. Cameras and NVRs drop connections routinely, and a viewer that
+# vanishes on its own is worse than one that reconnects.
 exec mpv \
-  --fs \
+  --force-window=immediate \
   --profile=low-latency \
   --rtsp-transport=tcp \
   --hwdec=auto-safe \
   --no-osc \
   --keep-open=no \
+  --loop-file=inf \
   --title="omarchy-cameras: ${name}" \
   -- "$stream"

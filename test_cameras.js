@@ -40,14 +40,31 @@ const apiConfig = JSON.stringify({
     quintal: { enabled: true },
     garagem: {},
     desligada: { enabled: false }
-  }
+  },
+  go2rtc: { streams: { garagem: ["rtsp://cam/1"] } }
 })
 
 const fromFrigate = frigateCameras(apiConfig, frigateConfig)
 assert.deepEqual(fromFrigate.map(c => c.name), ["garagem", "quintal"], "sorted, disabled dropped")
-assert.equal(fromFrigate[0].stream, "rtsp://nvr.lan:8554/garagem")
 assert.equal(fromFrigate[0].thumb, "http://nvr.lan:5000/api/garagem/latest.jpg")
 assert.equal(fromFrigate[0].source, "frigate")
+
+// Restreamed cameras get the RTSP restream; the rest fall back to Frigate's
+// MJPEG, because :8554/<name> for a camera go2rtc never heard of is a dead
+// stream and there is no way to tell from the tile.
+assert.equal(fromFrigate[0].stream, "rtsp://nvr.lan:8554/garagem")
+assert.equal(fromFrigate[1].stream, "http://nvr.lan:5000/api/quintal")
+
+// A config with no go2rtc section at all must not send every camera to a
+// restream that does not exist.
+const noRestream = JSON.stringify({ cameras: { quintal: {} } })
+assert.equal(frigateCameras(noRestream, frigateConfig)[0].stream,
+  "http://nvr.lan:5000/api/quintal")
+
+// Camera names are user-chosen and reach the URL verbatim.
+const oddName = JSON.stringify({ cameras: { "back yard": {} } })
+assert.equal(frigateCameras(oddName, frigateConfig)[0].stream,
+  "http://nvr.lan:5000/api/back%20yard")
 
 assert.deepEqual(frigateCameras("", frigateConfig), [], "empty body yields no cameras")
 assert.deepEqual(frigateCameras("<html>502</html>", frigateConfig), [], "HTML error page yields no cameras")

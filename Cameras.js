@@ -59,6 +59,12 @@ function frigateCameras(raw, frigate) {
   var host = hostOf(base)
   if (!base || !host) return []
 
+  // Only cameras listed under go2rtc have an RTSP restream. Asking
+  // :8554/<name> for one that isn't there yields a dead stream, and most
+  // Frigate installs restream a handful of cameras at most.
+  var restreamed = isObject(parsed.go2rtc) && isObject(parsed.go2rtc.streams)
+    ? parsed.go2rtc.streams : {}
+
   var out = []
   for (var name in parsed.cameras) {
     var camera = parsed.cameras[name]
@@ -71,14 +77,29 @@ function frigateCameras(raw, frigate) {
       source: "frigate",
       thumbKind: "url",
       thumb: base + "/api/" + encodeURIComponent(name) + "/latest.jpg",
-      // ponytail: main stream only. Frigate's substream is conventionally
-      // "<name>_sub" but nothing guarantees it exists, and a 404 restream is
-      // a worse default than a heavier one.
-      stream: "rtsp://" + host + ":" + frigate.rtspPort + "/" + name,
+      stream: streamFor(name, base, host, frigate.rtspPort, restreamed),
       ptz: false
     })
   }
   return out.sort(function(a, b) { return a.name < b.name ? -1 : 1 })
+}
+
+// Best playable address for a Frigate camera.
+//
+// The restream is the good one: H.264/H.265 straight through, and Frigate
+// holds the only connection to the camera. Without it, /api/<name> is
+// Frigate's MJPEG of the detect feed — heavier on the wire and softer, but it
+// exists for every camera, needs no configuration, and beats a tile that
+// cannot be opened at all.
+//
+// ponytail: main stream only. Frigate's substream is conventionally
+// "<name>_sub", but nothing guarantees it, and a dead substream is a worse
+// default than a heavy main one.
+function streamFor(name, base, host, rtspPort, restreamed) {
+  if (Object.prototype.hasOwnProperty.call(restreamed, name)) {
+    return "rtsp://" + host + ":" + rtspPort + "/" + encodeURIComponent(name)
+  }
+  return base + "/api/" + encodeURIComponent(name)
 }
 
 // Cameras discovered by bin/omarchy-cameras-onvif and cached in the config.
@@ -97,9 +118,23 @@ function onvifCameras(config, runtimeDir) {
       thumb: dir + "/" + slug(entry.name) + ".jpg",
       stream: String(entry.rtsp),
       xaddr: String(entry.xaddr || ""),
+      host: String(entry.host || ""),
+      // The password lives in the keyring; the user is what lets
+      // omarchy-cameras-view look it up.
+      user: String(entry.user || ""),
       ptz: entry.ptz === true
     }
   })
+}
+
+// Add or replace an ONVIF camera, keyed on the device address. Re-probing a
+// camera should update it, not add a second copy of it.
+function upsertOnvif(config, entry) {
+  var next = config.onvif.filter(function(existing) {
+    return existing.xaddr !== entry.xaddr && existing.name !== entry.name
+  })
+  next.push(entry)
+  return next
 }
 
 // Filename-safe form of a camera name, for thumbnail paths.

@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""ONVIF discovery and stream lookup for the Omarchy cameras plugin.
+
+Standard library only: the three SOAP envelopes this needs are fixed strings,
+and a generated client would pull in a dependency tree to build the same
+three. Prints JSON on stdout, which the QML side reads off a Process.
+
+  omarchy-cameras-onvif discover [--timeout 3]
+  omarchy-cameras-onvif probe <xaddr> [--user admin]     # password on stdin
+  omarchy-cameras-onvif stream-url <rtsp> [--user admin]
+
+`probe` stashes the password in the session keyring under
+(service=omarchy-cameras, key=onvif-<host>) and leaves it out of its output,
+so the credential never reaches cameras.json. `stream-url` reads it back and
+splices it into the URL, which is how omarchy-cameras-view gets a playable
+address without the password ever being written down.
+"""
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import socket
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+
+WSDL_DISCOVERY = "http://schemas.xmlsoap.org/ws/2005/04/discovery"
+SECRET_SERVICE = "omarchy-cameras"
+
+PROBE_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
+<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+            xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
+            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+  <e:Header>
+    <w:MessageID>uuid:{message_id}</w:MessageID>
+    <w:To e:mustUnderstand="true">urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>
+    <w:Action e:mustUnderstand="true">{discovery}/Probe</w:Action>
+  </e:Header>
+  <e:Body>
+    <d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe>
+  </e:Body>
+</e:Envelope>"""
+
+
+# --------------------------------------------------------------- XML helpers
+
+def local_name(tag):
+    """Tag without its namespace. ONVIF devices disagree about prefixes and
+    even about which namespace revision they answer in, so every lookup here
+    matches on the local name rather than a fully qualified tag."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def find_all(node, name):
+    return [el for el in node.iter() if local_name(el.tag) == name]
+
+
+def find_first(node, name):
+    for el in node.iter():
+        if local_name(el.tag) == name:
+            return el
+    return None
+
+
+def text_of(node, name, default=""):
+    el = find_first(node, name) if node is not None else None
+    return (el.text or "").strip() if el is not None else default
+
+
+# ------------------------------------------------------------ WS-Security
+
+def password_digest(nonce, created, password):
+    """Base64(SHA1(nonce + created + password)) — WS-Security UsernameToken
+    Profile 1.0. `nonce` is the raw bytes; the envelope carries their base64.
+    `created` must be the exact string written into <Created>."""
+    digest = hashlib.sha1(nonce + created.encode() + password.encode()).digest()
+    return base64.b64encode(digest).decode()
+
+
+def security_header(user, password, nonce=None, created=None):
+    if not user:
+        return ""
+    if nonce is None:
+        nonce = os.urandom(16)
+    if created is None:
+        created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    wsse = ("http://docs.oasis-open.org/wss/2004/01/"
+            "oasis-200401-wss-wssecurity-secext-1.0.xsd")
+    wsu = ("http://docs.oasis-open.org/wss/2004/01/"
+           "oasis-200401-wss-wssecurity-utility-1.0.xsd")
+    profile = ("http://docs.oasis-open.org/wss/2004/01/"
+               "oasis-200401-wss-username-token-profile-1.0")
+    soap_sec = ("http://docs.oasis-open.org/wss/2004/01/"
+                "oasis-200401-wss-soap-message-security-1.0")
+    return (
+        f'<s:Header><wsse:Security xmlns:wsse="{wsse}">'
+        f'<wsse:UsernameToken>'
+        f'<wsse:Username>{escape(user)}</wsse:Username>'
+        f'<wsse:Password Type="{profile}#PasswordDigest">'
+        f'{password_digest(nonce, created, password)}</wsse:Password>'
+        f'<wsse:Nonce EncodingType="{soap_sec}#Base64Binary">'
+        f'{base64.b64encode(nonce).decode()}</wsse:Nonce>'
+        f'<wsu:Created xmlns:wsu="{wsu}">{created}</wsu:Created>'
+        f'</wsse:UsernameToken></wsse:Security></s:Header>'
+    )
+
+
+def escape(value):
+    return (str(value).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def soap_call(url, body, user="", password="", timeout=6):
+    envelope = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">'
+        f'{security_header(user, password)}'
+        f'<s:Body>{body}</s:Body></s:Envelope>'
+    ).encode()
+    request = urllib.request.Request(
+        url, data=envelope,
+        headers={"Content-Type": "application/soap+xml; charset=utf-8"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return ET.fromstring(response.read())
+
+
+# ------------------------------------------------------------- discovery
+
+def scope_value(scopes, kind):
+    """Pull `onvif://www.onvif.org/<kind>/<value>` out of a Scopes string."""
+    marker = "/" + kind + "/"
+    for scope in scopes.split():
+        index = scope.find(marker)
+        if index != -1:
+            return urllib.parse.unquote(scope[index + len(marker):])
+    return ""
+
+
+def parse_probe_matches(payload):
+    """Devices described by one ProbeMatches response."""
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return []
+
+    devices = []
+    for match in find_all(root, "ProbeMatch"):
+        addresses = text_of(match, "XAddrs")
+        xaddr = next((a for a in addresses.split() if a.startswith("http")), "")
+        if not xaddr:
+            continue
+        scopes = text_of(match, "Scopes")
+        host = urllib.parse.urlparse(xaddr).hostname or ""
+        devices.append({
+            "xaddr": xaddr,
+            "host": host,
+            "name": scope_value(scopes, "name") or scope_value(scopes, "hardware") or host,
+        })
+    return devices
+
+
+def discover(timeout):
+    """WS-Discovery probe on the local segment.
+
+    ponytail: one socket on the default route. A host bridged onto several
+    camera VLANs needs one send per interface; add that when a setup that
+    needs it shows up.
+    """
+    message = PROBE_TEMPLATE.format(message_id=uuid.uuid4(), discovery=WSDL_DISCOVERY)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+    sock.settimeout(0.5)
+    try:
+        sock.sendto(message.encode(), ("239.255.255.250", 3702))
+        deadline = timeout
+        found = {}
+        while deadline > 0:
+            try:
+                payload, _ = sock.recvfrom(65535)
+            except socket.timeout:
+                deadline -= 0.5
+                continue
+            for device in parse_probe_matches(payload):
+                # Cameras answer a probe more than once; the xaddr is what
+                # every later call is keyed on, so dedupe on it.
+                found.setdefault(device["xaddr"], device)
+        return sorted(found.values(), key=lambda d: d["name"].lower())
+    finally:
+        sock.close()
+
+
+# ----------------------------------------------------------------- probe
+
+def service_xaddrs(root):
+    """Media and PTZ endpoints out of a GetCapabilities response."""
+    services = {}
+    for name in ("Media", "PTZ"):
+        section = find_first(root, name)
+        if section is None:
+            continue
+        addr = text_of(section, "XAddr")
+        if addr:
+            services[name] = addr
+    return services
+
+
+def strip_credentials(url):
+    """Drop any userinfo a camera echoes back into its own stream URL. The
+    password belongs in the keyring, and cameras.json is a plain file."""
+    parsed = urllib.parse.urlsplit(url)
+    if not parsed.hostname:
+        return url
+    netloc = parsed.hostname
+    if parsed.port:
+        netloc += ":%d" % parsed.port
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def with_credentials(url, user, password):
+    """Splice credentials into a stream URL. Both halves are percent-encoded:
+    passwords with `@` or `/` in them are common and would otherwise produce a
+    URL that parses as some other host entirely."""
+    parsed = urllib.parse.urlsplit(url)
+    if not parsed.hostname or not user:
+        return url
+    userinfo = urllib.parse.quote(user, safe="")
+    if password:
+        userinfo += ":" + urllib.parse.quote(password, safe="")
+    netloc = parsed.hostname
+    if parsed.port:
+        netloc += ":%d" % parsed.port
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, userinfo + "@" + netloc, parsed.path, parsed.query,
+         parsed.fragment))
+
+
+def lookup_secret(host):
+    result = subprocess.run(
+        ["secret-tool", "lookup", "service", SECRET_SERVICE, "key", "onvif-%s" % host],
+        capture_output=True, check=False)
+    return result.stdout.decode().strip() if result.returncode == 0 else ""
+
+
+def store_secret(host, password):
+    if not password:
+        return
+    subprocess.run(
+        ["secret-tool", "store", "--label=Omarchy camera %s" % host,
+         "service", SECRET_SERVICE, "key", "onvif-%s" % host],
+        input=password.encode(), check=False,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def probe(xaddr, user, password):
+    media_ns = 'xmlns:trt="http://www.onvif.org/ver10/media/wsdl"'
+    schema_ns = 'xmlns:tt="http://www.onvif.org/ver10/schema"'
+
+    capabilities = soap_call(
+        xaddr,
+        '<tds:GetCapabilities xmlns:tds="http://www.onvif.org/ver10/device/wsdl">'
+        '<tds:Category>All</tds:Category></tds:GetCapabilities>',
+        user, password)
+    services = service_xaddrs(capabilities)
+    media = services.get("Media")
+    if not media:
+        raise RuntimeError("device advertises no Media service")
+
+    profiles = soap_call(media, f"<trt:GetProfiles {media_ns}/>", user, password)
+    tokens = [el.get("token") for el in find_all(profiles, "Profiles") if el.get("token")]
+    if not tokens:
+        raise RuntimeError("device advertises no media profiles")
+
+    # ponytail: first profile. On every camera seen so far that is the main
+    # stream; the substream, when there is one, comes later in the list.
+    stream = soap_call(
+        media,
+        f'<trt:GetStreamUri {media_ns} {schema_ns}><trt:StreamSetup>'
+        '<tt:Stream>RTP-Unicast</tt:Stream>'
+        '<tt:Transport><tt:Protocol>RTSP</tt:Protocol></tt:Transport>'
+        f'</trt:StreamSetup><trt:ProfileToken>{escape(tokens[0])}</trt:ProfileToken>'
+        '</trt:GetStreamUri>',
+        user, password)
+    uri = text_of(find_first(stream, "MediaUri") or stream, "Uri")
+    if not uri:
+        raise RuntimeError("device returned no stream URI")
+
+    host = urllib.parse.urlparse(xaddr).hostname or ""
+    device_info = None
+    try:
+        device_info = soap_call(
+            xaddr,
+            '<tds:GetDeviceInformation '
+            'xmlns:tds="http://www.onvif.org/ver10/device/wsdl"/>',
+            user, password)
+    except (urllib.error.URLError, ET.ParseError, OSError):
+        pass  # A name is a nicety; the camera still works without one.
+
+    name = text_of(device_info, "Name") if device_info is not None else ""
+    store_secret(host, password)
+
+    return {
+        "name": name or host,
+        "host": host,
+        "xaddr": xaddr,
+        "rtsp": strip_credentials(uri),
+        "user": user,
+        "ptz": "PTZ" in services,
+    }
+
+
+# ------------------------------------------------------------------ main
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="omarchy-cameras-onvif")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    discover_cmd = commands.add_parser("discover")
+    discover_cmd.add_argument("--timeout", type=float, default=3.0)
+
+    probe_cmd = commands.add_parser("probe")
+    probe_cmd.add_argument("xaddr")
+    probe_cmd.add_argument("--user", default="")
+
+    url_cmd = commands.add_parser("stream-url")
+    url_cmd.add_argument("rtsp")
+    url_cmd.add_argument("--user", default="")
+
+    args = parser.parse_args(argv)
+
+    if args.command == "discover":
+        json.dump({"devices": discover(args.timeout)}, sys.stdout)
+        sys.stdout.write("\n")
+        return 0
+
+    if args.command == "stream-url":
+        host = urllib.parse.urlsplit(args.rtsp).hostname or ""
+        print(with_credentials(args.rtsp, args.user, lookup_secret(host)))
+        return 0
+
+    # Read the password off stdin so it never lands in argv, where every
+    # other process on the machine could read it out of /proc.
+    password = sys.stdin.readline().strip() if not sys.stdin.isatty() else ""
+    try:
+        json.dump({"camera": probe(args.xaddr, args.user, password)}, sys.stdout)
+    except Exception as error:  # noqa: BLE001 - the UI shows whatever went wrong
+        json.dump({"error": str(error)}, sys.stdout)
+        sys.stdout.write("\n")
+        return 1
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
