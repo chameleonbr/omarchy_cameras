@@ -26,6 +26,7 @@ Item {
 
   // Event alerts. A non-empty alertModel is what puts previews on screen.
   property bool placementVisible: false
+  property real lastAlertLatency: -1
   // Newest Frigate event start_time already handled, persisted so a shell
   // restart does not replay the day's detections as a burst of previews.
   property real lastEventTime: 0
@@ -377,6 +378,11 @@ Item {
     // ponytail: four cards. Past that the column is taller than it is useful
     // and the oldest is the least interesting, so it goes.
     while (alertModel.count >= 4) alertModel.remove(0)
+
+    // How far behind the detection this alert is. The only honest way to
+    // compare the MQTT and polling paths, and worth keeping: "are my alerts
+    // fresh" is a real question once this is running unattended.
+    lastAlertLatency = Math.max(0, Date.now() / 1000 - event.startTime)
 
     alertModel.append({
       eventId: event.id,

@@ -231,6 +231,8 @@ Panel {
         + " broker=\"" + info.host + ":" + info.port + "\""
         + " frigateMqtt=" + info.enabled
         + " user=\"" + info.user + "\""
+        + " lastAlertLatency=" + (root.service.lastAlertLatency < 0
+            ? "none" : root.service.lastAlertLatency.toFixed(1) + "s")
         + (root.service.mqttError ? " error=\"" + root.service.mqttError + "\"" : "")
     }
     // ONVIF discovery is wired up but not surfaced while the Frigate side is

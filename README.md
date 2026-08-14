@@ -100,6 +100,9 @@ Optional, and strictly a shortcut: Frigate publishes a detection to MQTT the
 instant it makes one, with no poll interval in the way. Switch it on in
 **Config → MQTT**.
 
+Measured against the same live camera: **0.6-0.7s** from the start of a
+detection to the preview, where polling took 3.9-9.1s.
+
 Nothing has to be typed but the password. Host, port, topic prefix and username
 all come from Frigate's own `/api/config`, and the password goes to the keyring
 under `key=mqtt-<host>`.
@@ -227,6 +230,7 @@ omarchy-shell shell toggle avila.cameras '{}'   # grid, on the focused monitor
 omarchy-shell avila.cameras view garagem        # straight to one camera
 omarchy-shell avila.cameras alerts on           # or off; "" just reports
 omarchy-shell avila.cameras mqtt on             # or off; "" reports broker state
+                                                # and the last alert's latency
 omarchy-shell avila.cameras showPlacement       # rehearse the alert position
 omarchy-shell avila.cameras status
 ```
