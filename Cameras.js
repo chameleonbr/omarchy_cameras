@@ -5,7 +5,7 @@
 // over plain data.
 
 var DEFAULT_CONFIG = {
-  frigate: { url: "", rtspPort: 8554 },
+  frigate: { url: "", rtspPort: 8554, user: "" },
   notifyLabels: ["person"],
   alerts: {
     enabled: false,
@@ -52,7 +52,10 @@ function parseConfig(raw) {
     frigate: {
       url: trimSlash(frigate.url),
       rtspPort: isFinite(port) && port > 0 && port < 65536
-        ? port : DEFAULT_CONFIG.frigate.rtspPort
+        ? port : DEFAULT_CONFIG.frigate.rtspPort,
+      // Only the username. The password lives in the keyring; a login is
+      // attempted whenever this is set and Frigate answers 401.
+      user: String(frigate.user || "")
     },
     notifyLabels: notifyLabels,
     alerts: parseAlerts(parsed.alerts, notifyLabels),
@@ -111,6 +114,7 @@ function newEvents(raw, after, labels) {
       id: String(event.id || ""),
       camera: String(event.camera || ""),
       label: String(event.label || ""),
+      hasSnapshot: event.has_snapshot === true,
       startTime: start
     })
   }
@@ -120,10 +124,16 @@ function newEvents(raw, after, labels) {
 
 // Cameras out of Frigate's /api/config. Frigate already renders a JPEG per
 // camera, so these need no local ffmpeg — the thumbnail is just a URL.
-function frigateCameras(raw, frigate) {
+function frigateCameras(raw, frigate, runtimeDir) {
   var parsed = null
   try { parsed = JSON.parse(String(raw || "")) } catch (e) { return [] }
   if (!isObject(parsed) || !isObject(parsed.cameras)) return []
+
+  // QML's Image fetches URLs itself and cannot be given Frigate's JWT cookie,
+  // so on an authenticated instance the thumbnails have to arrive as files
+  // that omarchy-cameras-frigate mirrors into the runtime dir.
+  var authed = !!frigate.user
+  var dir = trimSlash(runtimeDir || "")
 
   var base = trimSlash(frigate.url)
   var host = hostOf(base)
@@ -145,8 +155,10 @@ function frigateCameras(raw, frigate) {
       id: "frigate:" + name,
       name: name,
       source: "frigate",
-      thumbKind: "url",
-      thumb: base + "/api/" + encodeURIComponent(name) + "/latest.jpg",
+      thumbKind: authed ? "file" : "url",
+      thumb: authed
+        ? dir + "/" + slug(name) + ".jpg"
+        : base + "/api/" + encodeURIComponent(name) + "/latest.jpg",
       stream: streamFor(name, base, host, frigate.rtspPort, restreamed),
       ptz: false
     })
@@ -228,6 +240,39 @@ function mergeCameras(frigate, onvif) {
     out.push(onvif[i])
   }
   return out
+}
+
+// "<name>=<path>" pairs for `omarchy-cameras-frigate mirror`, one per Frigate
+// camera whose thumbnail has to come through the authenticated fetcher.
+function mirrorSpecs(cameras) {
+  return cameras.filter(function(camera) {
+    return camera.source === "frigate" && camera.thumbKind === "file"
+  }).map(function(camera) {
+    return slug(camera.name) + "=/api/" + encodeURIComponent(camera.name) + "/latest.jpg"
+  })
+}
+
+// The still Frigate kept for one event.
+//
+// This is deliberately not a live frame: by the time an alert is on screen the
+// thing that tripped it has often already left, and a live feed shows an empty
+// driveway. `bbox=1` draws Frigate's own box, label and score, so the picture
+// says what was detected and where.
+//
+// The snapshot is the full frame and only exists when the camera has snapshots
+// enabled; the thumbnail always exists and is what Frigate itself falls back
+// to. Both URLs are stable, so unlike the polled thumbnails these want the
+// Image cache left on.
+function eventImagePath(event) {
+  if (!event || !event.id) return ""
+  var path = "/api/events/" + encodeURIComponent(event.id)
+  return event.hasSnapshot ? path + "/snapshot.jpg?bbox=1" : path + "/thumbnail.jpg"
+}
+
+function eventImageUrl(frigateUrl, event) {
+  var base = trimSlash(frigateUrl)
+  var path = eventImagePath(event)
+  return base && path ? base + path : ""
 }
 
 // Cache-busted thumbnail source. QML's Image cache would otherwise pin the

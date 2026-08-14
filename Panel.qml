@@ -86,6 +86,8 @@ Panel {
     if (service) {
       urlField.text = service.config.frigate.url
       portField.text = String(service.config.frigate.rtspPort)
+      frigateUserField.text = service.config.frigate.user
+      frigatePasswordField.text = ""
       durationField.text = String(service.config.alerts.durationSec)
       alertWidthField.text = String(service.config.alerts.width)
     }
@@ -119,11 +121,21 @@ Panel {
   }
 
   // Only burn network and decode while someone is looking at the grid.
+  readonly property bool showingThumbs: opened && view === "grid" && hasCameras
+
   Timer {
     interval: root.thumbIntervalMs
-    running: root.opened && root.view === "grid" && root.hasCameras
+    running: root.showingThumbs
     repeat: true
     onTriggered: root.tick++
+  }
+
+  // Tells the service to run the authenticated mirror only while thumbnails
+  // are on screen. One widget per monitor writes this, so it is an OR: any
+  // open grid keeps the mirror alive.
+  onShowingThumbsChanged: if (service) {
+    if (showingThumbs) service.thumbsWanted = true
+    else Qt.callLater(function() { if (!root.showingThumbs) service.thumbsWanted = false })
   }
 
   // manageIpc is false above so this handler owns the target: the base only
@@ -183,9 +195,13 @@ Panel {
         + (root.service.discoverError ? " error=\"" + root.service.discoverError + "\"" : "")
     }
     // Same write the config form does, for setting a machine up from a script.
-    function setFrigate(url: string, rtspPort: string): string {
+    // No password here on purpose: it would land in the shell history and in
+    // this process's argv. Store it with
+    //   bin/omarchy-cameras-frigate store-password <url>
+    // which reads it on stdin, or use the config form.
+    function setFrigate(url: string, rtspPort: string, user: string): string {
       if (!root.service) return "service unavailable"
-      root.service.setFrigate(url, parseInt(rtspPort, 10) || 8554)
+      root.service.setFrigate(url, parseInt(rtspPort, 10) || 8554, user, "")
       return "ok"
     }
     function alerts(state: string): string {
@@ -247,6 +263,8 @@ Panel {
       // The catcher takes keys before its children, so every text input has to
       // be named here or it silently refuses to accept letters.
       blocked: urlField.activeFocus || portField.activeFocus
+        || frigateUserField.activeFocus || frigatePasswordField.activeFocus
+        || durationField.activeFocus || alertWidthField.activeFocus
         || userField.activeFocus || passwordField.activeFocus
       onMoveRequested: function(dx, dy) {
         if (root.view === "config") return
@@ -428,8 +446,33 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: if (root.service) {
-                  root.service.setFrigate(urlField.text, parseInt(portField.text, 10) || 8554)
+                  root.service.setFrigate(urlField.text,
+                    parseInt(portField.text, 10) || 8554,
+                    frigateUserField.text, frigatePasswordField.text)
+                  frigatePasswordField.text = ""
                 }
+              }
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              TextField {
+                id: frigateUserField
+                width: (parent.width - Style.space(8)) / 2
+                placeholderText: "user (if auth is on)"
+                foreground: root.foreground
+                onAccepted: saveFrigate.clicked()
+              }
+
+              TextField {
+                id: frigatePasswordField
+                width: (parent.width - Style.space(8)) / 2
+                placeholderText: "password"
+                password: true
+                foreground: root.foreground
+                onAccepted: saveFrigate.clicked()
               }
             }
 
@@ -439,8 +482,9 @@ Panel {
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              text: "Leave blank to run ONVIF-only. Cameras come from Frigate's "
-                + "/api/config; the fullscreen view plays the go2rtc restream."
+              text: "Leave the URL blank to run ONVIF-only. Frigate 0.15+ has "
+                + "auth on by default — fill in the login and the password goes "
+                + "to the keyring, never to the config file."
             }
 
             PanelSeparator { foreground: root.foreground }

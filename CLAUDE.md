@@ -140,6 +140,19 @@ here reports 2259 to Quickshell and 1920 to `grim`. When checking placement in
 a screenshot, scale the expected coordinates by `1920/2259` before hunting for
 the card, or you will conclude it never rendered.
 
+**QML's `Image` fetches URLs itself and cannot carry a cookie.** That is the
+whole reason `bin/omarchy-cameras-frigate` exists: on an authenticated Frigate
+the JWT lives in an HTTP-only cookie, so images have to be mirrored to files in
+`$XDG_RUNTIME_DIR/omarchy-cameras/` and shown as `file://`. `Cameras.js`
+switches `thumbKind` to `"file"` the moment `frigate.user` is set. Keep that
+path off when there is no login — an unauthenticated instance needs no extra
+processes at all.
+
+Guard "is auth on" with `!!frigate.user`, not `frigate.user !== ""`: callers
+can hand `frigateCameras` a config object built by hand, and `undefined !== ""`
+is true, which silently switched every thumbnail to a file that nothing was
+writing.
+
 **Never set `Image.source` on a visible thumbnail.** It clears the element
 while the new file loads, so a polled JPEG blinks on every tick. `CameraThumb`
 double-buffers and swaps only once the incoming frame is `Ready`.

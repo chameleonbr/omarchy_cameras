@@ -1,0 +1,133 @@
+#!/bin/bash
+# Authenticated access to a Frigate instance.
+#
+#   omarchy-cameras-frigate get <base-url> <user> <path>
+#   omarchy-cameras-frigate mirror <base-url> <user> <interval> <name=path>...
+#
+# Frigate 0.15+ has auth on by default: POST /api/login returns a JWT in an
+# HTTP-only cookie. `get` prints the body on stdout, logging in first if the
+# request comes back 401. `mirror` keeps a set of images fresh as files in the
+# runtime dir, which is the only way QML's Image can show them — it loads URLs
+# itself and cannot be handed a cookie.
+#
+# The password comes from the keyring, never from argv or the config file.
+
+set -uo pipefail
+
+SERVICE="omarchy-cameras"
+RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cameras"
+mkdir -p "$RUNTIME"
+chmod 700 "$RUNTIME"
+
+host_of() {
+  # scheme://[user@]host[:port]/... -> host
+  local rest="${1#*://}"
+  rest="${rest#*@}"
+  rest="${rest%%/*}"
+  echo "${rest%%:*}"
+}
+
+jar_for() {
+  echo "$RUNTIME/frigate-$(host_of "$1").cookies"
+}
+
+login() {
+  local base="$1" user="$2" jar password
+  jar="$(jar_for "$base")"
+  [[ -z "$user" ]] && return 1
+
+  password="$(secret-tool lookup service "$SERVICE" key "frigate-$(host_of "$base")" 2>/dev/null)"
+  [[ -z "$password" ]] && return 1
+
+  # The credentials go in a here-doc on stdin, so they never appear in argv.
+  local body
+  body="$(jq -nc --arg u "$user" --arg p "$password" '{user:$u, password:$p}')"
+  ( umask 077; : >"$jar" )
+  curl -fsS --max-time 8 -c "$jar" \
+    -H "Content-Type: application/json" \
+    --data-binary @- "$base/api/login" <<<"$body" >/dev/null 2>&1
+}
+
+# Fetch one path into a file, logging in and retrying once on 401. Always
+# writes to a file rather than stdout: curl's -w status would otherwise be
+# interleaved with the body. Unauthenticated instances never touch the keyring.
+fetch() {
+  local base="$1" user="$2" path="$3" out="$4" jar code
+  jar="$(jar_for "$base")"
+
+  local args=(-sS --max-time 10 -w '%{http_code}' -o "$out")
+  [[ -f "$jar" ]] && args+=(-b "$jar")
+
+  code="$(curl "${args[@]}" "$base$path" 2>/dev/null)"
+  if [[ "$code" == "401" || "$code" == "403" ]] && [[ -n "$user" ]]; then
+    login "$base" "$user" || return 1
+    code="$(curl -sS --max-time 10 -w '%{http_code}' -o "$out" \
+      -b "$jar" "$base$path" 2>/dev/null)"
+  fi
+  [[ "$code" == "200" ]]
+}
+
+case "${1:-}" in
+  get)
+    base="${2:?usage: get <base-url> <user> <path>}"
+    user="${3-}"
+    path="${4:?usage: get <base-url> <user> <path>}"
+    tmp="$(mktemp "$RUNTIME/.get.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+    fetch "$base" "$user" "$path" "$tmp" || exit 1
+    cat "$tmp"
+    ;;
+
+  save)
+    # One image into $RUNTIME/<name>.jpg, then exit.
+    base="${2:?usage: save <base-url> <user> <path> <name>}"
+    user="${3-}"
+    path="${4:?usage: save <base-url> <user> <path> <name>}"
+    name="${5:?usage: save <base-url> <user> <path> <name>}"
+    tmp="$RUNTIME/.$name.jpg.part"
+    if fetch "$base" "$user" "$path" "$tmp"; then
+      mv -f "$tmp" "$RUNTIME/$name.jpg"
+    else
+      rm -f "$tmp"
+      exit 1
+    fi
+    ;;
+
+  mirror)
+    # Keep N images fresh on disk until killed. Each argument is
+    # "<name>=<path>"; the image lands at $RUNTIME/<name>.jpg.
+    base="${2:?usage: mirror <base-url> <user> <interval> <name=path>...}"
+    user="${3-}"
+    interval="${4:?usage: mirror <base-url> <user> <interval> <name=path>...}"
+    shift 4
+    (( $# )) || exit 0
+
+    # Write to a temp file and rename, so a half-downloaded frame is never
+    # what QML picks up mid-read.
+    while true; do
+      for spec in "$@"; do
+        name="${spec%%=*}"
+        path="${spec#*=}"
+        tmp="$RUNTIME/.$name.jpg.part"
+        if fetch "$base" "$user" "$path" "$tmp"; then
+          mv -f "$tmp" "$RUNTIME/$name.jpg"
+        else
+          rm -f "$tmp"
+        fi
+      done
+      sleep "$interval"
+    done
+    ;;
+
+  store-password)
+    # Reads the password on stdin so it stays out of argv.
+    base="${2:?usage: store-password <base-url>}"
+    secret-tool store --label="Omarchy Frigate $(host_of "$base")" \
+      service "$SERVICE" key "frigate-$(host_of "$base")"
+    ;;
+
+  *)
+    echo "usage: omarchy-cameras-frigate get|mirror|store-password ..." >&2
+    exit 2
+    ;;
+esac

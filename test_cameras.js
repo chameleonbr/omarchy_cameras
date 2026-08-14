@@ -73,6 +73,32 @@ assert.deepEqual(
 assert.deepEqual(newEvents(events, 0, ["PERSON"]).events.map(e => e.id), ["a", "c"],
   "label matching is case-insensitive")
 
+// --- eventImageUrl ---------------------------------------------------------
+//
+// The alert shows this still, not a live frame: fast movement is over before
+// anyone looks, and a live feed would show an empty driveway.
+
+const withSnap = { id: "1786720728.064015-pbf5n9", hasSnapshot: true }
+const noSnap = { id: "1786720728.064015-pbf5n9", hasSnapshot: false }
+
+assert.equal(eventImageUrl("http://nvr.lan:5000/", withSnap),
+  "http://nvr.lan:5000/api/events/1786720728.064015-pbf5n9/snapshot.jpg?bbox=1",
+  "bbox=1 is what draws the box, label and score onto the still")
+assert.equal(eventImageUrl("http://nvr.lan:5000", noSnap),
+  "http://nvr.lan:5000/api/events/1786720728.064015-pbf5n9/thumbnail.jpg",
+  "a camera with snapshots off still has a thumbnail")
+assert.equal(eventImageUrl("", withSnap), "")
+assert.equal(eventImageUrl("http://nvr.lan:5000", null), "")
+assert.equal(eventImageUrl("http://nvr.lan:5000", { hasSnapshot: true }), "",
+  "no id means no URL to build")
+
+assert.equal(newEvents(events, 0, ["person"]).events[0].hasSnapshot, false,
+  "has_snapshot absent is not a snapshot")
+assert.equal(
+  newEvents('[{"id":"z","camera":"c","label":"person","start_time":9,"has_snapshot":true}]',
+    0, ["person"]).events[0].hasSnapshot,
+  true)
+
 // --- hostOf ----------------------------------------------------------------
 
 assert.equal(hostOf("http://nvr.lan:5000"), "nvr.lan")
@@ -91,7 +117,7 @@ const apiConfig = JSON.stringify({
   go2rtc: { streams: { garagem: ["rtsp://cam/1"] } }
 })
 
-const fromFrigate = frigateCameras(apiConfig, frigateConfig)
+const fromFrigate = frigateCameras(apiConfig, frigateConfig, "/run/user/1000/omarchy-cameras")
 assert.deepEqual(fromFrigate.map(c => c.name), ["garagem", "quintal"], "sorted, disabled dropped")
 assert.equal(fromFrigate[0].thumb, "http://nvr.lan:5000/api/garagem/latest.jpg")
 assert.equal(fromFrigate[0].source, "frigate")
@@ -110,8 +136,34 @@ assert.equal(frigateCameras(noRestream, frigateConfig)[0].stream,
 
 // Camera names are user-chosen and reach the URL verbatim.
 const oddName = JSON.stringify({ cameras: { "back yard": {} } })
-assert.equal(frigateCameras(oddName, frigateConfig)[0].stream,
+assert.equal(frigateCameras(oddName, frigateConfig, "/run")[0].stream,
   "http://nvr.lan:5000/api/back%20yard")
+
+// --- authenticated Frigate -------------------------------------------------
+//
+// QML's Image fetches URLs itself and cannot carry Frigate's JWT cookie, so
+// with a login configured the thumbnails must come off disk instead.
+
+const authed = { url: "http://nvr.lan:5000", rtspPort: 8554, user: "admin" }
+const authedCams = frigateCameras(apiConfig, authed, "/run/user/1000/omarchy-cameras")
+assert.equal(authedCams[0].thumbKind, "file")
+assert.equal(authedCams[0].thumb, "/run/user/1000/omarchy-cameras/garagem.jpg")
+assert.equal(authedCams[0].stream, "rtsp://nvr.lan:8554/garagem",
+  "auth changes where the picture comes from, not the stream")
+assert.equal(fromFrigate[0].thumbKind, "url", "no login means no mirror process")
+
+assert.deepEqual(mirrorSpecs(authedCams),
+  ["garagem=/api/garagem/latest.jpg", "quintal=/api/quintal/latest.jpg"])
+assert.deepEqual(mirrorSpecs(fromFrigate), [], "nothing to mirror without auth")
+assert.deepEqual(
+  mirrorSpecs(frigateCameras(JSON.stringify({ cameras: { "back yard": {} } }), authed, "/run")),
+  ["back_yard=/api/back%20yard/latest.jpg"],
+  "the file name is slugged but the URL keeps the real name")
+
+assert.equal(parseConfig('{"frigate":{"user":"admin"}}').frigate.user, "admin")
+assert.equal(empty.frigate.user, "", "no login configured by default")
+assert.equal(JSON.stringify(parseConfig('{"frigate":{"user":"a","password":"p"}}').frigate)
+  .indexOf("password"), -1, "a password must never survive into the config object")
 
 assert.deepEqual(frigateCameras("", frigateConfig), [], "empty body yields no cameras")
 assert.deepEqual(frigateCameras("<html>502</html>", frigateConfig), [], "HTML error page yields no cameras")

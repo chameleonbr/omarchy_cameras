@@ -16,6 +16,9 @@ PanelWindow {
 
   property var camera: null
   property string label: ""
+  // The still Frigate saved for the event, with its bounding box drawn.
+  // Static on purpose — see Cameras.eventImageUrl.
+  property string imageUrl: ""
   // Placement rehearsal: same window, same geometry, no camera. Showing where
   // alerts land by drawing the actual window beats any diagram of it.
   property bool placeholder: false
@@ -23,7 +26,6 @@ PanelWindow {
   property string position: "top-center"
   // Clearance below the bar, so the preview sits under it rather than behind.
   property int barClearance: Style.bar.sizeHorizontal
-  property int tick: 0
 
   signal activated()
 
@@ -75,27 +77,22 @@ PanelWindow {
       color: root.placeholder ? "black" : Qt.darker(Color.popups.background, 1.3)
       clip: true
 
-      CameraThumb {
-        id: thumb
+      // One fixed URL per event, so the Image cache is an asset here rather
+      // than the liability it is for polled thumbnails. PreserveAspectFit,
+      // not Crop: the bounding box is the point, and cropping can cut off the
+      // very thing that tripped the alert.
+      Image {
+        id: shot
         anchors.fill: parent
+        fillMode: Image.PreserveAspectFit
+        asynchronous: true
         visible: !root.placeholder
-        camera: root.placeholder ? null : root.camera
-        tick: root.tick
-      }
-
-      // A preview only lives for a few seconds, so it is worth polling faster
-      // than the grid does — this is the one place the picture is meant to
-      // read as movement rather than as a still.
-      Timer {
-        interval: 500
-        running: root.visible && !root.placeholder
-        repeat: true
-        onTriggered: root.tick++
+        source: root.placeholder ? "" : root.imageUrl
       }
 
       Text {
         anchors.centerIn: parent
-        visible: root.placeholder || !thumb.hasFrame
+        visible: root.placeholder || shot.status !== Image.Ready
         text: root.placeholder ? "👀" : "󰞮"
         color: Qt.darker(Color.foreground, 1.55)
         // The nerd-font glyph comes from the theme font; the emoji does not

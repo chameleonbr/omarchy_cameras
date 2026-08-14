@@ -18,6 +18,33 @@ Hyprland window. This plugin uses each where it is good:
 Nobody watches nine streams at once. Decoding nine of them to fill 170px tiles
 would spend a lot of CPU on pictures too small to read.
 
+### If Frigate requires a login
+
+Frigate 0.15+ ships with auth on. Fill in **user** and **password** next to the
+URL in Config; the password goes to the keyring (`service=omarchy-cameras`,
+`key=frigate-<host>`) and never into `cameras.json`. Only the username is
+stored there, which is what tells the plugin a login is needed at all.
+
+Leaving the password blank on a later save keeps the one already stored, so
+re-saving the URL will not wipe a working login.
+
+Behind the scenes an authenticated instance works differently, because QML
+fetches image URLs itself and cannot be handed Frigate's JWT cookie: while the
+grid is open, `omarchy-cameras-frigate mirror` keeps each visible camera's JPEG
+fresh in `$XDG_RUNTIME_DIR/omarchy-cameras/` and the tiles read those files. It
+runs only while thumbnails are on screen, and only when a login is configured —
+without one, nothing extra runs at all.
+
+To store the password from a script instead:
+
+```bash
+bin/omarchy-cameras-frigate store-password http://nvr.lan:5000   # reads stdin
+omarchy-shell avila.cameras setFrigate http://nvr.lan:5000 8554 admin
+```
+
+`setFrigate` deliberately takes no password — it would end up in shell history
+and in the process's argv.
+
 ### Which stream a camera plays
 
 Frigate only restreams the cameras listed under `go2rtc:` in its own config.
@@ -34,9 +61,14 @@ here, the plugin picks it up on the next refresh.
 ### Motion alerts
 
 Off by default. Once armed, the plugin polls Frigate's events every 5s and pops
-a small live preview of whichever camera tripped — sized, timed, and placed
-where you tell it, on the monitor you tell it. Clicking the preview opens that
-camera full size; otherwise it disappears on its own.
+a small preview of whichever camera tripped — sized, timed, and placed where
+you tell it, on the monitor you tell it. Clicking the preview opens that camera
+full size; otherwise it disappears on its own.
+
+The preview is the **still Frigate saved for that event**, with its bounding
+box, label and score drawn on (`snapshot.jpg?bbox=1`). It is deliberately not a
+live frame: quick movement is over long before anyone looks up, and a live feed
+would just show an empty driveway.
 
 Everything about it is a setting in **Config → Motion alerts**: on/off, which
 labels count, which monitor, which corner (top-center sits by the clock),
@@ -109,7 +141,8 @@ where ONVIF discovery writes its results.
 {
   "frigate": {
     "url": "http://nvr.lan:5000",
-    "rtspPort": 8554
+    "rtspPort": 8554,
+    "user": ""
   },
   "notifyLabels": ["person"],
   "alerts": {
@@ -126,6 +159,8 @@ where ONVIF discovery writes its results.
 
 - `frigate.url` — leave empty to run ONVIF-only. Cameras come from
   `/api/config`; disabled ones are skipped.
+- `frigate.user` — set only when Frigate requires a login; the password lives
+  in the keyring. See "If Frigate requires a login" above.
 - `frigate.rtspPort` — the go2rtc restream port. The fullscreen view plays
   `rtsp://<frigate-host>:<rtspPort>/<camera>`, not the camera directly, so
   Frigate's connection to the camera is the only one.
@@ -207,5 +242,6 @@ quickshell log -p $OMARCHY_PATH/shell -t 200 | grep -i avila
 | `CameraThumb.qml` | double-buffered thumbnail; swaps frames only once the next one has loaded, so a polled JPEG does not blink |
 | `Alert.qml` | the motion-alert preview window, owned by the service |
 | `Cameras.js` | source merging, stream selection, event filtering, URL building — pure functions, no QML |
+| `bin/omarchy-cameras-frigate` | authenticated Frigate access: login, one-shot fetch, and the thumbnail mirror |
 | `bin/omarchy-cameras-onvif` | WS-Discovery, stream lookup, keyring — stdlib Python |
 | `bin/omarchy-cameras-view` | the mpv launcher |

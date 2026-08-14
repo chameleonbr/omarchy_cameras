@@ -27,6 +27,7 @@ Item {
   // Event alerts. `alertCamera` non-null is what puts the preview on screen.
   property var alertCamera: null
   property string alertLabel: ""
+  property string alertImage: ""
   property bool placementVisible: false
   // Newest Frigate event start_time already handled, persisted so a shell
   // restart does not replay the day's detections as a burst of previews.
@@ -43,6 +44,19 @@ Item {
 
   readonly property string viewScript: scriptPath("bin/omarchy-cameras-view")
   readonly property string onvifScript: scriptPath("bin/omarchy-cameras-onvif")
+  readonly property string frigateScript: scriptPath("bin/omarchy-cameras-frigate")
+
+  // With a username set, every Frigate request goes through the helper, which
+  // logs in and carries the JWT cookie. Without one, plain curl is enough and
+  // no extra process is involved.
+  readonly property bool frigateAuthed: !!config.frigate.user
+
+  function frigateCommand(path) {
+    if (frigateAuthed) {
+      return [frigateScript, "get", config.frigate.url, config.frigate.user, path]
+    }
+    return ["curl", "-fsS", "--max-time", "10", config.frigate.url + path]
+  }
 
   function scriptPath(relative) {
     return decodeURIComponent(
@@ -73,9 +87,30 @@ Item {
     var onvif = Cameras.onvifCameras(config, runtimeDir)
     cameras = config.frigate.url
       ? Cameras.mergeCameras(
-          Cameras.frigateCameras(frigateStdout.text, config.frigate), onvif)
+          Cameras.frigateCameras(frigateStdout.text, config.frigate, runtimeDir), onvif)
       : onvif
   }
+
+  // ------------------------------------------------------- thumbnail mirror
+
+  // Only authenticated instances need this: QML fetches unauthenticated URLs
+  // perfectly well on its own. Runs while something is actually looking at the
+  // thumbnails, so an idle desktop costs nothing.
+  property bool thumbsWanted: false
+
+  function syncMirror() {
+    var specs = Cameras.mirrorSpecs(cameras)
+    var want = thumbsWanted && frigateAuthed && specs.length > 0
+    if (mirrorProcess.running === want && !want) return
+    mirrorProcess.running = false
+    if (!want) return
+    mirrorProcess.command = [frigateScript, "mirror", config.frigate.url,
+                             config.frigate.user, "2"].concat(specs)
+    mirrorProcess.running = true
+  }
+
+  onThumbsWantedChanged: syncMirror()
+  onCamerasChanged: syncMirror()
 
   // ------------------------------------------------------------- writing
 
@@ -94,8 +129,22 @@ Item {
     config = Cameras.parseConfig(JSON.stringify(next))
   }
 
-  function setFrigate(url, port) {
-    saveConfig({ frigate: { url: String(url || "").trim(), rtspPort: port } })
+  function setFrigate(url, port, user, password) {
+    var trimmedUrl = String(url || "").trim()
+    var trimmedUser = String(user || "").trim()
+    saveConfig({
+      frigate: { url: trimmedUrl, rtspPort: port, user: trimmedUser }
+    })
+    // Blank password means "keep whatever is already in the keyring", so
+    // re-saving the URL does not wipe a working login.
+    if (trimmedUrl && trimmedUser && password) {
+      storePasswordProcess.secret = String(password)
+      storePasswordProcess.command = [frigateScript, "store-password", trimmedUrl]
+      storePasswordProcess.running = true
+    }
+    // A changed login invalidates any cookie jar and every mirrored frame.
+    mirrorProcess.running = false
+    Qt.callLater(syncMirror)
   }
 
   function removeOnvif(name) {
@@ -187,8 +236,7 @@ Item {
 
   function pollEvents() {
     if (!config.alerts.enabled || !config.frigate.url || eventsProcess.running) return
-    eventsProcess.command = ["curl", "-fsS", "--max-time", "5",
-      config.frigate.url + "/api/events?limit=20&after=" + lastEventTime]
+    eventsProcess.command = frigateCommand("/api/events?limit=20&after=" + lastEventTime)
     eventsProcess.running = true
   }
 
@@ -212,12 +260,26 @@ Item {
     alertLabel = latest.label
     alertCamera = camera
     alertTimer.restart()
+
+    if (!frigateAuthed) {
+      alertImage = Cameras.eventImageUrl(config.frigate.url, latest)
+      return
+    }
+    // Authenticated: the still has to be fetched with the cookie and handed to
+    // QML as a file. Show the card straight away and fill the picture in when
+    // it lands, rather than delaying the alert on a download.
+    alertImage = ""
+    eventShotProcess.running = false
+    eventShotProcess.command = [frigateScript, "save", config.frigate.url,
+      config.frigate.user, Cameras.eventImagePath(latest), "event"]
+    eventShotProcess.running = true
   }
 
   function dismissAlert() {
     alertTimer.stop()
     alertCamera = null
     alertLabel = ""
+    alertImage = ""
   }
 
   // ------------------------------------------------------------- frigate
@@ -225,8 +287,7 @@ Item {
   function fetchFrigateConfig() {
     if (!config.frigate.url || frigateProcess.running) return
     loading = true
-    frigateProcess.command = ["curl", "-fsS", "--max-time", "5",
-                              config.frigate.url + "/api/config"]
+    frigateProcess.command = frigateCommand("/api/config")
     frigateProcess.running = true
   }
 
@@ -344,6 +405,32 @@ Item {
     onTriggered: root.pollEvents()
   }
 
+  // Long-running: keeps the visible cameras' JPEGs fresh on disk until stopped.
+  Process { id: mirrorProcess }
+
+  // secret-tool reads the password on stdin, so it never lands in argv where
+  // any process on the machine could read it out of /proc.
+  Process {
+    id: storePasswordProcess
+    property string secret: ""
+    stdinEnabled: true
+    onStarted: {
+      write(secret + "\n")
+      secret = ""
+    }
+  }
+
+  Process {
+    id: eventShotProcess
+    onExited: function(code) {
+      // The name is fixed, so bust QML's cache with the event's own start
+      // time — two events in a row would otherwise show the first picture.
+      if (code === 0 && root.alertCamera) {
+        root.alertImage = "file://" + root.runtimeDir + "/event.jpg?t=" + root.lastEventTime
+      }
+    }
+  }
+
   Process {
     id: eventsProcess
     stdout: StdioCollector {
@@ -390,6 +477,7 @@ Item {
     }
     camera: root.alertCamera
     label: root.alertLabel
+    imageUrl: root.alertImage
     placeholder: root.placementVisible && root.alertCamera === null
     previewWidth: root.config.alerts.width
     position: root.config.alerts.position
