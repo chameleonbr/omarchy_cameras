@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "id": "avila.cameras",
+  "name": "Cameras",
+  "version": "0.1.0",
+  "author": "Andre Avila",
+  "license": "MIT",
+  "description": "ONVIF and Frigate camera viewer: live thumbnails in the bar, fullscreen playback in mpv.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Cameras",
+    "description": "Live camera thumbnails; pick one to open it fullscreen in mpv.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "columns": 2,
+      "thumbIntervalMs": 2000
+    },
+    "schema": [
+      {
+        "key": "columns",
+        "type": "integer",
+        "label": "Popup grid columns",
+        "min": 1,
+        "max": 4,
+        "step": 1,
+        "defaultValue": 2
+      },
+      {
+        "key": "thumbIntervalMs",
+        "type": "integer",
+        "label": "Thumbnail refresh (ms)",
+        "min": 500,
+        "max": 30000,
+        "step": 500,
+        "defaultValue": 2000
+      }
+    ]
+  }
+}

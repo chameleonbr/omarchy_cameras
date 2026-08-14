@@ -1,0 +1,25 @@
+#!/bin/bash
+# Open one camera stream fullscreen. Layer 2 of the plugin: Wayland has no
+# window embedding, so the focused view is a real mpv window rather than
+# something painted inside omarchy-shell.
+#
+# Usage: omarchy-cameras-view <name> <stream-url>
+
+set -euo pipefail
+
+name="${1:?usage: omarchy-cameras-view <name> <stream-url>}"
+stream="${2:?usage: omarchy-cameras-view <name> <stream-url>}"
+
+# --profile=low-latency drops mpv's buffering to near zero; without it an RTSP
+# feed sits seconds behind, which defeats the point of looking at a camera.
+# --rtsp-transport=tcp because UDP tears badly over Wi-Fi and most cameras
+# support both.
+exec mpv \
+  --fs \
+  --profile=low-latency \
+  --rtsp-transport=tcp \
+  --hwdec=auto-safe \
+  --no-osc \
+  --keep-open=no \
+  --title="omarchy-cameras: ${name}" \
+  -- "$stream"
