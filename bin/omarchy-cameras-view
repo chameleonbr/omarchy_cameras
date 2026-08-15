@@ -43,7 +43,14 @@ fi
 # built-in fullscreen toggle, so the only thing missing was saying so — hence
 # the opening OSD line. --osd-playing-msg fires once when playback starts,
 # which is exactly when the window appears.
+#
+# The stream is handed over as a one-line playlist on a pipe, never as an
+# argument. A camera URL carries its password in the userinfo, and argv is
+# world-readable through /proc — so the URL only ever exists in this shell's
+# memory and on an anonymous fd that dies with the player. It never reaches
+# the process table and never touches disk.
 exec mpv \
+  --playlist=<(printf '%s\n' "$stream") \
   --force-window=immediate \
   --profile=low-latency \
   --rtsp-transport=tcp \
@@ -54,5 +61,4 @@ exec mpv \
   --osd-playing-msg="${name}          f  fullscreen     q  close" \
   --osd-playing-msg-duration=4000 \
   --osd-font-size=26 \
-  --title="omarchy-cameras: ${name}" \
-  -- "$stream"
+  --title="omarchy-cameras: ${name}"

@@ -32,11 +32,10 @@ var ALERT_POSITIONS = ["top-left", "top-center", "top-right"]
 // fail to start, which is silent apart from a shell warning.
 var REQUIRED_TOOLS = [
   { name: "curl", need: "reading anything from Frigate" },
-  { name: "mpv", need: "opening a camera" },
+  { name: "mpv", need: "opening a camera, and ONVIF thumbnails" },
   { name: "jq", need: "logging in to an authenticated Frigate" },
   { name: "secret-tool", need: "storing passwords" },
-  { name: "python3", need: "MQTT alerts and ONVIF discovery" },
-  { name: "ffmpeg", need: "thumbnails for ONVIF cameras" }
+  { name: "python3", need: "MQTT alerts and ONVIF discovery" }
 ]
 
 // One shell command that prints the name of each tool that is not on PATH.

@@ -23,12 +23,12 @@ bar customization controls. Restart the shell once after installing:
 omarchy restart shell
 ```
 
-The plugin calls `curl`, `mpv`, `ffmpeg`, `jq`, `secret-tool` and `python3`.
-Omarchy ships all but `curl` and `python3`, which normally arrive as
-dependencies of something else:
+The plugin calls `curl`, `mpv`, `jq`, `secret-tool` and `python3`. Omarchy
+ships all but `curl` and `python3`, which normally arrive as dependencies of
+something else:
 
 ```bash
-sudo pacman -S --needed curl python jq mpv ffmpeg libsecret
+sudo pacman -S --needed curl python jq mpv libsecret
 ```
 
 Anything missing is named at the top of **Config** rather than failing quietly.
@@ -153,9 +153,9 @@ too small to read.
 Frigate cameras play the go2rtc restream where one exists and Frigate's MJPEG
 endpoint otherwise, because asking for a restream that is not there just yields
 a dead window. ONVIF cameras play their own RTSP stream, and their thumbnails
-come from one ffmpeg per visible camera: ONVIF does define a snapshot endpoint,
-but cameras that advertise one and then refuse every request are common enough
-that it cannot be relied on.
+come from one mpv per visible camera, held open and asked for a frame on a
+timer: ONVIF does define a snapshot endpoint, but cameras that advertise one
+and then refuse every request are common enough that it cannot be relied on.
 
 Searching for ONVIF cameras probes every address on the local subnet as well as
 the multicast group. The multicast reply arrives with no matching outbound
@@ -181,6 +181,7 @@ Editing QML does not update the running widget, symlinked or not. Run
 node test_cameras.js   # camera lists, stream selection, event filtering
 python3 test_mqtt.py   # MQTT packet framing and event payloads
 python3 test_onvif.py  # WS-Security digest, SOAP parsing, credentials
+python3 test_thumbd.py # runtime directory ownership and symlink checks
 ```
 
 `omarchy-shell avila.cameras status` reports what the plugin currently sees;
@@ -191,6 +192,17 @@ python3 test_onvif.py  # WS-Security digest, SOAP parsing, credentials
 Passwords are never written to `cameras.json`. Frigate, MQTT and per-camera
 ONVIF passwords go to the system keyring under `service=omarchy-cameras`, and
 reach the helper scripts over stdin rather than argv, which any process on the
-machine can read. An RTSP credential is spliced in only when mpv launches.
+machine can read.
+
+A camera URL carries its password in the userinfo, so it is never an argument
+either: mpv is handed the URL as a playlist on an anonymous pipe, both for the
+viewer and for thumbnails, and the list of cameras to watch also arrives on
+stdin. Nothing about a camera shows up in `/proc`.
+
+Thumbnails and cookies are written under `$XDG_RUNTIME_DIR`, which is per-user
+and 0700. There is no fallback to `/tmp`: the helpers refuse to run rather than
+put camera frames on a predictable path in a world-writable directory, and the
+subdirectory is checked for ownership, mode, and not being a symlink before
+anything is written to it.
 
 MIT licensed.

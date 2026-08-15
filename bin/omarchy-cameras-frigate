@@ -15,9 +15,29 @@
 set -uo pipefail
 
 SERVICE="omarchy-cameras"
-RUNTIME="${XDG_RUNTIME_DIR:-/tmp}/omarchy-cameras"
-mkdir -p "$RUNTIME"
-chmod 700 "$RUNTIME"
+
+# $XDG_RUNTIME_DIR only, with no fallback: it is per-user and 0700, and a
+# Wayland session cannot exist without it. Falling back to a world-writable
+# /tmp would trade a guaranteed private directory for a predictable path
+# someone else can create first. A cookie jar lives here.
+: "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}"
+RUNTIME="$XDG_RUNTIME_DIR/omarchy-cameras"
+
+# An existing entry is checked, not trusted: a real directory, ours, and shut
+# to everyone else. -h catches a symlink, which -d alone would follow.
+if [[ -e "$RUNTIME" || -h "$RUNTIME" ]]; then
+  if [[ -h "$RUNTIME" || ! -d "$RUNTIME" ]]; then
+    echo "$RUNTIME is not a directory" >&2; exit 1
+  fi
+  if [[ ! -O "$RUNTIME" ]]; then
+    echo "$RUNTIME is owned by someone else" >&2; exit 1
+  fi
+  if [[ "$(stat -c '%a' "$RUNTIME")" != "700" ]]; then
+    echo "$RUNTIME is accessible to other users" >&2; exit 1
+  fi
+else
+  mkdir -m 700 "$RUNTIME" || exit 1
+fi
 
 host_of() {
   # scheme://[user@]host[:port]/... -> host

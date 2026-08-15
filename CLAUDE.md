@@ -36,11 +36,12 @@ return "Target not found."
 node test_cameras.js   # Cameras.js: parsing, stream selection, event filtering
 python3 test_mqtt.py   # MQTT packet framing, event payload handling
 python3 test_onvif.py  # WS-Security digest, SOAP parsing, credential handling
+python3 test_thumbd.py # runtime dir: symlink, ownership and mode rejection
 omarchy plugin validate .
 ```
 
-All three test files are single scripts of `assert` calls with no framework — run
-them whole, there is nothing to run individually. Neither touches the network.
+All four test files are single scripts of `assert` calls with no framework — run
+them whole, there is nothing to run individually. None touches the network.
 
 `test_cameras.js` `eval`s `Cameras.js` into its own scope rather than importing
 it, because `Cameras.js` is a QML `.js` resource and cannot have `export`
@@ -183,13 +184,36 @@ never fires. The binding is fine for UI and `Timer.running`.
 
 **ONVIF's `GetSnapshotUri` is not usable.** Both cameras tested advertise one
 and answer HTTP 500 to it — no auth, basic and digest alike. Thumbnails come
-from `omarchy-cameras-thumbd`, one long-lived ffmpeg per camera. Long-lived
-matters: a fresh ffmpeg waits for a keyframe, 54s on one camera here, while a
+from `omarchy-cameras-thumbd`, one long-lived player per camera. Long-lived
+matters: a fresh decoder waits for a keyframe, 54s on one camera here, while a
 held-open one delivers on schedule.
 
-A bash helper that ends in `wait` must `exit` from its signal trap. Returning
-from the trap drops straight back into `wait`, and the script outlives the grid
-that started it — kill the children, then leave.
+**A camera URL carries its password, so it must never be an argument.** That
+rules ffmpeg out for thumbnails: `ffmpeg -h demuxer=rtsp` lists no credential
+option, the input is only ever argv, and argv is world-readable through
+`/proc`. The concat demuxer (URL in a 0600 file) hangs on live RTSP. mpv is
+what works — `--playlist=/dev/fd/N` on an anonymous pipe, then
+`screenshot-to-file` over `--input-ipc-server`, which writes the same path
+repeatedly. `omarchy-cameras-view` uses `--playlist=<(printf ...)` for the same
+reason. Along the way this got faster, not slower: first frame in 5s where a
+fresh ffmpeg took 54s.
+
+Same rule one level up: `thumbd` reads its camera list on **stdin**, because
+even without a password a stream path and the account watching it have no
+business in the process table. Quickshell's `write()` does not close the pipe,
+so `stdinEnabled = false` is what gives the reader its EOF — and that
+assignment overwrites the declared `stdinEnabled: true` binding, so every
+call site must set it back to true before starting the process again.
+
+**`$XDG_RUNTIME_DIR` has no fallback, on purpose.** It is per-user and 0700,
+and a Wayland session cannot exist without it — the compositor socket is in
+there. The old `${XDG_RUNTIME_DIR:-/tmp}` traded that guarantee for a
+predictable path in a world-writable directory. Whoever creates the
+subdirectory (`thumbd`, `omarchy-cameras-frigate`) also checks it rather than
+trusting it: a real directory, `lstat`-ed so a symlink is not followed, owned
+by this uid, no bits for anyone else. `Service.qml` only reads from it, and
+leaves `runtimeDir` empty when the variable is unset, which gates the thumbnail
+daemon off.
 
 **Every external command belongs in `Cameras.REQUIRED_TOOLS`.** A missing
 binary makes `Process` fail to start, which emits no signal the plugin can see

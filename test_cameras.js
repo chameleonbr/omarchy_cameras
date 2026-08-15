@@ -187,7 +187,7 @@ assert.deepEqual(parseMissingTools("bash: line 1: warning\n"), [],
   "a shell's own chatter must not become a fake missing dependency")
 
 assert.equal(describeMissingTools([]), "")
-assert.equal(describeMissingTools(["mpv"]), "Missing command: mpv (opening a camera)")
+assert.match(describeMissingTools(["mpv"]), /^Missing command: mpv \(.+\)$/)
 assert.match(describeMissingTools(["curl", "jq"]), /^Missing commands: curl \(.+\), jq \(.+\)$/)
 assert.equal(describeMissingTools(["nonsense"]), "Missing command: nonsense",
   "an unknown name still gets reported rather than swallowed")

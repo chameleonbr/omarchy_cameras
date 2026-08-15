@@ -15,8 +15,15 @@ Item {
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string configPath: home + "/.config/omarchy/cameras.json"
-  readonly property string runtimeDir:
-    (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omarchy-cameras"
+  // $XDG_RUNTIME_DIR only, with no fallback: it is per-user and 0700, and a
+  // Wayland session cannot exist without it — the compositor socket is in
+  // there. A fallback to world-writable /tmp would put camera frames on a
+  // predictable path anyone could create first. Empty here means the helpers
+  // that write those frames refuse to run, so nothing reads a planted file.
+  readonly property string runtimeDir: {
+    var base = Quickshell.env("XDG_RUNTIME_DIR")
+    return base ? base + "/omarchy-cameras" : ""
+  }
 
   // Parsed cameras.json. Also the ONVIF discovery cache.
   property var config: Cameras.parseConfig("")
@@ -142,10 +149,15 @@ Item {
   // mirror: only while someone is looking.
   function syncOnvifThumbs() {
     var specs = Cameras.onvifThumbSpecs(cameras)
-    var want = thumbsWanted && specs.length > 0
+    var want = thumbsWanted && runtimeDir !== "" && specs.length > 0
     thumbProcess.running = false
     if (!want) return
-    thumbProcess.command = [thumbScript, "2"].concat(specs)
+    // The camera list goes in on stdin, never argv: a stream path and the
+    // account it is watched with are readable by every user on the machine
+    // once they are in /proc. Only the interval is an argument.
+    thumbProcess.specs = specs.join("\n") + "\n"
+    thumbProcess.command = [thumbScript, "2"]
+    thumbProcess.stdinEnabled = true
     thumbProcess.running = true
   }
 
@@ -186,6 +198,7 @@ Item {
     if (trimmedUrl && trimmedUser && password) {
       storePasswordProcess.secret = String(password)
       storePasswordProcess.command = [frigateScript, "store-password", trimmedUrl]
+      storePasswordProcess.stdinEnabled = true
       storePasswordProcess.running = true
     }
     // A changed login invalidates any cookie jar and every mirrored frame.
@@ -345,6 +358,7 @@ Item {
     mqttPasswordProcess.command = ["secret-tool", "store",
       "--label=Omarchy Frigate MQTT " + mqttInfo.host,
       "service", "omarchy-cameras", "key", "mqtt-" + mqttInfo.host]
+    mqttPasswordProcess.stdinEnabled = true
     mqttPasswordProcess.running = true
   }
 
@@ -640,7 +654,14 @@ Item {
   Process { id: mirrorProcess }
 
   // One ffmpeg per ONVIF camera, held open for as long as the grid is up.
-  Process { id: thumbProcess }
+  Process {
+    id: thumbProcess
+    property string specs: ""
+    stdinEnabled: true
+    // thumbd reads the whole list, so it needs EOF. Process.write() does not
+    // close the pipe on its own — clearing stdinEnabled is what does.
+    onStarted: { write(specs); stdinEnabled = false }
+  }
 
   // The password goes over stdin, never argv, where any process on the machine
   // could read it out of /proc. Same EOF requirement as above.
@@ -710,7 +731,9 @@ Item {
 
   // secret-tool reads the password from stdin and waits for EOF, so stdin has
   // to be closed after writing or the process hangs forever and onExited never
-  // fires. Setting stdinEnabled false is how Quickshell closes the pipe.
+  // fires. Setting stdinEnabled false is how Quickshell closes the pipe — and
+  // that assignment overwrites the declared binding, so every caller has to
+  // set it back to true before starting the process again.
   Process {
     id: mqttPasswordProcess
     property string secret: ""
