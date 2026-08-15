@@ -337,6 +337,12 @@ Item {
     return "Not connected — polling every 3s"
   }
 
+  // Credentials that cross the network readable because the server is
+  // configured that way. Not something the plugin can fix on its own, and a
+  // Frigate on plain HTTP over a home LAN is an ordinary setup — so the config
+  // screen says so rather than refusing to work.
+  readonly property var insecureWarnings: Cameras.insecureWarnings(config, mqttInfo)
+
   function setMqttEnabled(enabled) {
     if (enabled) mqttError = ""
     saveAlerts({ useMqtt: enabled === true })
@@ -699,8 +705,7 @@ Item {
   // it. mqttRetry owns the restarting instead.
   Process {
     id: mqttProcess
-    command: [root.mqttScript, root.mqttInfo.host, String(root.mqttInfo.port),
-              root.mqttInfo.prefix, "--user", root.mqttInfo.user]
+    command: Cameras.mqttCommand(root.mqttScript, root.mqttInfo)
     stdout: SplitParser { onRead: function(line) { root.handleMqttLine(line) } }
     onExited: root.mqttConnected = false
   }

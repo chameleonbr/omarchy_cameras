@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Stream Frigate detections from MQTT, one JSON line per new event.
 
-    omarchy-cameras-mqtt <host> <port> <topic-prefix> [--user avila]
+    omarchy-cameras-mqtt <host> <port> <topic-prefix> [--user avila] [--tls]
 
 Frigate publishes to `<prefix>/events` the instant it detects something, which
 is several seconds ahead of anything the HTTP API can tell us: /api/events only
@@ -18,13 +18,17 @@ HTTP replies:
     {"ready": true}                 once subscribed
     [{...frigate event object...}]  per new detection
 
-The password is read from the keyring, never passed in argv.
+The password is read from the keyring, never passed in argv. It still goes to
+the broker as a plain length-prefixed string, because that is what MQTT 3.1.1
+CONNECT is -- so --tls wraps the socket, and the caller turns it on from
+Frigate's own MQTT settings rather than from a question asked twice.
 """
 
 import argparse
 import json
 import os
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -136,9 +140,34 @@ def handle_publish(payload):
         emit([event])
 
 
-def run(host, port, prefix, user):
+def tls_context(ca_certs="", client_cert="", client_key="", insecure=False):
+    """TLS settings for the broker link, with verification on.
+
+    Everything here comes from Frigate's own mqtt config -- tls_ca_certs,
+    tls_client_cert, tls_client_key, tls_insecure -- so a broker behind a
+    private CA works without the plugin inventing settings for it.
+
+    tls_insecure is honoured because Frigate honours it and a self-signed
+    broker on a home LAN is a real setup. It is never a fallback taken here
+    after verification fails: an unverifiable handshake is an error, and the
+    retry loop upstairs reports it like any other.
+    """
+    context = ssl.create_default_context(cafile=ca_certs or None)
+    if client_cert:
+        context.load_cert_chain(client_cert, client_key or None)
+    if insecure:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def run(host, port, prefix, user, tls=False, tls_ca="", tls_cert="",
+        tls_key="", tls_insecure=False):
     password = lookup_password(host, user)
     sock = socket.create_connection((host, port), timeout=10)
+    if tls:
+        context = tls_context(tls_ca, tls_cert, tls_key, tls_insecure)
+        sock = context.wrap_socket(sock, server_hostname=host)
     # Short, so the loop wakes often enough to keep its own keepalive promise.
     # The deadline that matters is time since we last *sent* something, which
     # incoming traffic must not postpone — see the ping below.
@@ -230,10 +259,17 @@ def main(argv=None):
     parser.add_argument("port", type=int)
     parser.add_argument("prefix")
     parser.add_argument("--user", default="")
+    parser.add_argument("--tls", action="store_true")
+    parser.add_argument("--tls-ca", default="")
+    parser.add_argument("--tls-cert", default="")
+    parser.add_argument("--tls-key", default="")
+    parser.add_argument("--tls-insecure", action="store_true")
     args = parser.parse_args(argv)
 
     try:
-        return run(args.host, args.port, args.prefix, args.user) or 0
+        return run(args.host, args.port, args.prefix, args.user,
+                   args.tls, args.tls_ca, args.tls_cert, args.tls_key,
+                   args.tls_insecure) or 0
     except (OSError, ConnectionError, ValueError, struct.error) as error:
         return fail(str(error) or error.__class__.__name__)
 

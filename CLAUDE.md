@@ -273,9 +273,28 @@ give the retry `Timer` `triggeredOnStart` — a refused MQTT connection dies in
 of them before it was noticed). Drive the first attempt from
 `onMqttWantedChanged` and let a plain repeating timer own the backoff.
 
+**MQTT's CONNECT packet carries the password as a plain length-prefixed
+string.** Captured through a passthrough proxy, a plaintext connect puts
+`\x00\x05avila\x00\x0fsecret-pass-123` on the wire in the first 48 bytes; the
+same session with `--tls` yields a handshake and nothing recoverable. So the
+socket gets wrapped whenever Frigate says the broker speaks TLS — any of
+`tls_ca_certs`, `tls_client_cert`, `tls_client_key`, `tls_insecure`, or port
+8883. Verification stays on; `tls_insecure` is honoured because Frigate honours
+it, but it is never reached for here after a handshake fails, and a CA file
+Frigate named but that is missing raises rather than falling back to the system
+roots. `test_mqtt.py` asserts all of that on the context alone, no socket.
+
+Plain HTTP on Frigate is not the plugin's to fix, and a home LAN install on
+`http://` is ordinary, so `Cameras.insecureWarnings` says so at the top of the
+config screen instead of refusing. Keep it quiet when there is nothing to
+capture — no Frigate login, or a broker with no username — or the line stops
+being read. ONVIF needs no warning: WS-Security sends
+`Base64(SHA1(nonce + created + password))`, never the password, and there is no
+Basic fallback in `bin/omarchy-cameras-onvif`.
+
 Frigate's `/api/config` answers more than it looks like: the whole `mqtt` block
-(host, port, `topic_prefix`, user — never the password) and, indirectly, the
-go2rtc RTSP port. That port is not stated anywhere, but a restreamed camera
+(host, port, `topic_prefix`, user, the TLS material — never the password) and,
+indirectly, the go2rtc RTSP port. That port is not stated anywhere, but a restreamed camera
 feeds itself from the restream, so its own ffmpeg input is
 `rtsp://127.0.0.1:<port>/<name>` — `Cameras.restreamPort` reads it back out.
 Before adding a setting, check whether Frigate already knows the answer.

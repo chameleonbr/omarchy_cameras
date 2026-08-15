@@ -512,6 +512,21 @@ Panel {
               font.bold: true
             }
 
+            // A password crossing the network readable is the server's
+            // configuration, not a broken setting, so this says what is
+            // happening and leaves the choice alone.
+            Repeater {
+              model: root.service ? root.service.insecureWarnings : []
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "⚠  " + modelData
+                color: root.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
             // Which sources exist at all. Everything below belongs to one of
             // them, so someone running plain ONVIF cameras never has to read
             // about restreams, logins or MQTT.

@@ -366,3 +366,72 @@ assert.notEqual(thumbSource(fromFrigate[0], 7), thumbSource(fromFrigate[0], 8),
 assert.equal(thumbSource(null, 1), "")
 
 console.log("ok")
+
+// --- MQTT transport: the CONNECT packet carries the password in the clear ---
+//
+// So the only question that matters is whether the socket is wrapped. Frigate
+// already knows the answer, and every route to "yes" has to be honoured, or
+// the plugin silently downgrades a broker the user configured for TLS.
+
+{
+  const plain = frigateMqtt('{"mqtt":{"enabled":true,"host":"h","port":1883,"user":"u"}}')
+  assert.equal(plain.tls, false, "a plain 1883 broker is what it looks like")
+
+  assert.equal(frigateMqtt('{"mqtt":{"port":8883}}').tls, true,
+    "8883 is the registered secure-mqtt port")
+  assert.equal(frigateMqtt('{"mqtt":{"port":1883,"tls_ca_certs":"/ca.pem"}}').tls, true,
+    "a CA bundle means the broker speaks TLS on whatever port it likes")
+  assert.equal(frigateMqtt('{"mqtt":{"tls_client_cert":"/c.pem"}}').tls, true)
+  assert.equal(frigateMqtt('{"mqtt":{"tls_client_key":"/k.pem"}}').tls, true)
+  assert.equal(frigateMqtt('{"mqtt":{"tls_insecure":true}}').tls, true,
+    "insecure still means TLS — it only relaxes verification")
+  assert.equal(frigateMqtt('{"mqtt":{"tls_insecure":false}}').tls, false,
+    "an explicit false must not read as 'set'")
+
+  const full = frigateMqtt('{"mqtt":{"host":"b","port":8883,"user":"u",'
+    + '"tls_ca_certs":"/ca.pem","tls_client_cert":"/c.pem",'
+    + '"tls_client_key":"/k.pem","tls_insecure":true}}')
+  assert.deepEqual(mqttCommand("/s", full),
+    ["/s", "b", "8883", "frigate", "--user", "u", "--tls",
+     "--tls-ca", "/ca.pem", "--tls-cert", "/c.pem", "--tls-key", "/k.pem",
+     "--tls-insecure"])
+
+  assert.deepEqual(mqttCommand("/s", plain), ["/s", "h", "1883", "frigate", "--user", "u"],
+    "no TLS flag when the broker has none, and never a password in argv")
+  assert.ok(!mqttCommand("/s", full).join(" ").includes("password"))
+
+  const anon = frigateMqtt('{"mqtt":{"host":"h"}}')
+  assert.deepEqual(mqttCommand("/s", anon), ["/s", "h", "1883", "frigate"],
+    "no --user for a broker that wants none")
+}
+
+// --- warnings about credentials crossing the network readable ---------------
+//
+// Both cases are the server's configuration, so the plugin warns rather than
+// refuses. The point of the test is that it warns exactly when it should:
+// noise here trains people to ignore the line.
+
+{
+  const cfg = (url, user) => ({ frigate: { url: url, user: user } })
+  const tlsOff = { host: "b", user: "u", tls: false }
+  const tlsOn = { host: "b", user: "u", tls: true }
+  const anon = { host: "b", user: "", tls: false }
+
+  assert.equal(insecureWarnings(cfg("http://nvr:5000", "admin"), tlsOn).length, 1,
+    "an HTTP login is worth saying out loud")
+  assert.equal(insecureWarnings(cfg("https://nvr", "admin"), tlsOn).length, 0,
+    "HTTPS with a TLS broker is the quiet case")
+  assert.equal(insecureWarnings(cfg("http://nvr:5000", ""), tlsOn).length, 0,
+    "no login means no credential to capture")
+
+  assert.equal(insecureWarnings(cfg("https://nvr", "admin"), tlsOff).length, 1,
+    "a plaintext broker with a username is the MQTT half")
+  assert.equal(insecureWarnings(cfg("https://nvr", "admin"), anon).length, 0,
+    "a broker that wants no username sends no password")
+  assert.equal(insecureWarnings(cfg("http://nvr", "admin"), tlsOff).length, 2,
+    "both halves are reported separately")
+
+  assert.deepEqual(insecureWarnings(null, null), [], "junk in must not throw")
+  assert.equal(insecureWarnings(cfg("", ""), { host: "", user: "u", tls: false }).length, 0,
+    "nothing configured yet is not a warning")
+}

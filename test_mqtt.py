@@ -156,3 +156,32 @@ assert captured(b'[1,2,3]') == [], "a non-object payload is not an event"
 assert captured(json.dumps({"type": "new", "before": event}).encode()) == [[event]]
 
 print("ok")
+
+# --- TLS context ------------------------------------------------------------
+#
+# MQTT 3.1.1 puts the username and password in CONNECT as plain length-prefixed
+# strings, so whether the socket is wrapped is the whole of the credential's
+# protection. The default must verify, and the only way to stop verifying must
+# be the setting Frigate itself exposes.
+
+import ssl
+
+default = mqtt.tls_context()
+assert default.verify_mode == ssl.CERT_REQUIRED, default.verify_mode
+assert default.check_hostname is True
+assert default.minimum_version >= ssl.TLSVersion.TLSv1_2, default.minimum_version
+
+# tls_insecure is the user's explicit choice in Frigate's config, not something
+# reached for here when a handshake fails.
+relaxed = mqtt.tls_context(insecure=True)
+assert relaxed.check_hostname is False
+assert relaxed.verify_mode == ssl.CERT_NONE
+
+# A CA bundle Frigate named but that is not there must fail loudly. Falling
+# back to the system roots would quietly accept a broker the pinning was meant
+# to exclude.
+try:
+    mqtt.tls_context(ca_certs="/nonexistent/ca.pem")
+    raise AssertionError("a missing CA bundle must not be ignored")
+except OSError:
+    pass

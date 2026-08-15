@@ -160,20 +160,79 @@ function parseAlerts(raw, notifyLabels) {
 }
 
 // Frigate's own MQTT settings, straight out of /api/config. Host, port, topic
-// prefix and username are all there, so the only thing the user ever has to
-// type is the password — and that goes to the keyring, not here.
+// prefix, username and the TLS material are all there, so the only thing the
+// user ever has to type is the password — and that goes to the keyring, not
+// here.
+//
+// TLS matters more than it looks: MQTT's CONNECT packet carries the username
+// and password as plain length-prefixed strings, so on a bare TCP socket
+// anyone on the path reads them off the wire. Frigate already knows whether
+// its broker speaks TLS, so that answer is read back rather than asked for a
+// second time — any of the tls_* settings means yes, and so does port 8883,
+// which IANA registers for exactly this.
 function frigateMqtt(raw) {
   var parsed = null
   try { parsed = JSON.parse(String(raw || "")) } catch (e) { parsed = null }
   var mqtt = isObject(parsed) && isObject(parsed.mqtt) ? parsed.mqtt : {}
   var port = parseInt(mqtt.port, 10)
+  var ca = String(mqtt.tls_ca_certs || "")
+  var cert = String(mqtt.tls_client_cert || "")
+  var key = String(mqtt.tls_client_key || "")
+  var insecure = mqtt.tls_insecure === true
+  port = isFinite(port) && port > 0 && port < 65536 ? port : 1883
   return {
     enabled: mqtt.enabled === true,
     host: String(mqtt.host || ""),
-    port: isFinite(port) && port > 0 && port < 65536 ? port : 1883,
+    port: port,
     prefix: String(mqtt.topic_prefix || "frigate"),
-    user: String(mqtt.user || "")
+    user: String(mqtt.user || ""),
+    tls: !!(ca || cert || key || insecure || port === 8883),
+    tlsCa: ca,
+    tlsCert: cert,
+    tlsKey: key,
+    tlsInsecure: insecure
   }
+}
+
+// Arguments for bin/omarchy-cameras-mqtt. The password is not among them: the
+// script reads it from the keyring itself.
+function mqttCommand(script, mqtt) {
+  var command = [script, mqtt.host, String(mqtt.port), mqtt.prefix]
+  if (mqtt.user) command.push("--user", mqtt.user)
+  if (!mqtt.tls) return command
+  command.push("--tls")
+  if (mqtt.tlsCa) command.push("--tls-ca", mqtt.tlsCa)
+  if (mqtt.tlsCert) command.push("--tls-cert", mqtt.tlsCert)
+  if (mqtt.tlsKey) command.push("--tls-key", mqtt.tlsKey)
+  if (mqtt.tlsInsecure) command.push("--tls-insecure")
+  return command
+}
+
+// What to tell the user about credentials crossing the network in the clear.
+// Both cases are the server's configuration, not something the plugin can fix
+// on its own, so this is a warning rather than a refusal — a Frigate on plain
+// HTTP over a home LAN is an ordinary setup, and saying so is more use than
+// blocking it.
+function insecureWarnings(config, mqtt) {
+  var warnings = []
+  var frigate = isObject(config) && isObject(config.frigate) ? config.frigate : {}
+  var url = String(frigate.url || "")
+  var plainHttp = url.indexOf("http://") === 0
+
+  if (plainHttp && !!frigate.user) {
+    warnings.push("Frigate is on plain HTTP: the login, the session cookie and "
+      + "the camera images all cross the network readable. Use https:// if the "
+      + "server offers it.")
+  }
+  // A broker with no username asks for no password, so there is nothing to
+  // capture; the alert payloads themselves are already coming over the same
+  // network from Frigate.
+  if (isObject(mqtt) && mqtt.host && mqtt.user && !mqtt.tls) {
+    warnings.push("The MQTT broker is not using TLS: MQTT sends the password in "
+      + "the connect packet, readable to anyone on the path. Alerts keep working "
+      + "over HTTP polling if you would rather leave MQTT off.")
+  }
+  return warnings
 }
 
 // New Frigate events worth alerting on, oldest first.

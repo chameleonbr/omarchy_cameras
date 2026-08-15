@@ -199,6 +199,19 @@ either: mpv is handed the URL as a playlist on an anonymous pipe, both for the
 viewer and for thumbnails, and the list of cameras to watch also arrives on
 stdin. Nothing about a camera shows up in `/proc`.
 
+MQTT is used over TLS whenever Frigate says its broker speaks it — the plugin
+reads `tls_ca_certs`, `tls_client_cert`, `tls_client_key` and `tls_insecure`
+out of Frigate's own config, and treats port 8883 the same way, so there is
+nothing extra to configure. Certificates are verified. This matters because
+MQTT's connect packet carries the password as plain text: on a broker without
+TLS anyone on the path can read it, and the config screen says so.
+
+The same warning appears when a Frigate login is set on an `http://` URL. That
+one the plugin cannot fix — whether the server offers HTTPS is up to the
+server — so it is a warning rather than a refusal, since a Frigate on plain
+HTTP over a home LAN is an ordinary setup. ONVIF is unaffected either way: its
+WS-Security authentication sends a hash of the password, never the password.
+
 Thumbnails and cookies are written under `$XDG_RUNTIME_DIR`, which is per-user
 and 0700. There is no fallback to `/tmp`: the helpers refuse to run rather than
 put camera frames on a predictable path in a world-writable directory, and the
