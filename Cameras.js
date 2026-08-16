@@ -42,9 +42,13 @@ var REQUIRED_TOOLS = [
 // Cheaper and more honest than testing paths from QML, which does not know
 // what PATH the shell was started with.
 function toolCheckCommand() {
-  var names = REQUIRED_TOOLS.map(function(t) { return t.name }).join(" ")
+  var names = REQUIRED_TOOLS.map(function(t) { return t.name })
+  // The names are a constant in this file, but they go in as positional
+  // arguments rather than interpolated into the script: a tool name is the
+  // kind of thing someone adds without thinking about quoting.
   return ["bash", "-c",
-    'for c in ' + names + '; do command -v "$c" >/dev/null 2>&1 || echo "$c"; done']
+    'for c in "$@"; do command -v "$c" >/dev/null 2>&1 || echo "$c"; done',
+    "tool-check"].concat(names)
 }
 
 function parseMissingTools(raw) {
@@ -80,6 +84,32 @@ function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
+// An http(s) URL, or nothing.
+//
+// This value is concatenated into a curl argument, and curl reads a leading
+// dash as an option: "-o..." writes a file, "-K..." reads a config file from
+// disk. A bare host is what people actually type and curl already assumed http
+// for it, so that is filled in rather than rejected; anything that is not
+// recognisably a host or an http(s) URL is dropped instead of handed over.
+function safeHttpUrl(url) {
+  var trimmed = trimSlash(url)
+  if (!trimmed || /\s/.test(trimmed)) return ""
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  // Host must start with a letter or digit, which is what rules out "-o/tmp/x".
+  if (/^[A-Za-z0-9][A-Za-z0-9.\-_]*(:\d+)?(\/.*)?$/.test(trimmed)) {
+    return "http://" + trimmed
+  }
+  return ""
+}
+
+// A stream address the viewer can be handed. Same reasoning one level down:
+// the URI comes from whatever answered the ONVIF probe, and it ends up as a
+// playlist entry for mpv, which will open any scheme it is given.
+function safeStreamUrl(url) {
+  var trimmed = String(url || "").trim()
+  return /^(rtsps?|https?):\/\/[^\s]+$/i.test(trimmed) ? trimmed : ""
+}
+
 // Strip a trailing slash so "http://nvr:5000/" + "/api/config" stays sane.
 function trimSlash(url) {
   return String(url || "").replace(/\/+$/, "")
@@ -108,7 +138,7 @@ function parseConfig(raw) {
   return {
     sources: parseSources(parsed.sources, frigate, onvif),
     frigate: {
-      url: trimSlash(frigate.url),
+      url: safeHttpUrl(frigate.url),
       rtspPort: isFinite(port) && port > 0 && port < 65536
         ? port : DEFAULT_CONFIG.frigate.rtspPort,
       // Only the username. The password lives in the keyring; a login is
@@ -403,7 +433,9 @@ function streamFor(name, base, host, rtspPort, restreamed) {
 function onvifCameras(config, runtimeDir) {
   var dir = trimSlash(runtimeDir)
   return config.onvif.filter(function(entry) {
-    return entry.name && entry.rtsp
+    // A hand-edited config, or an older one written before the probe checked
+    // the scheme, must not put a file:// URL in front of the player.
+    return entry.name && safeStreamUrl(entry.rtsp)
   }).map(function(entry) {
     return {
       id: "onvif:" + entry.name,
@@ -411,7 +443,7 @@ function onvifCameras(config, runtimeDir) {
       source: "onvif",
       thumbKind: "file",
       thumb: dir + "/" + slug(entry.name) + ".jpg",
-      stream: String(entry.rtsp),
+      stream: safeStreamUrl(entry.rtsp),
       xaddr: String(entry.xaddr || ""),
       host: String(entry.host || ""),
       // The password lives in the keyring; the user is what lets

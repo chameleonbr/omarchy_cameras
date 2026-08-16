@@ -205,6 +205,47 @@ so `stdinEnabled = false` is what gives the reader its EOF — and that
 assignment overwrites the declared `stdinEnabled: true` binding, so every
 call site must set it back to true before starting the process again.
 
+**`Quickshell.execDetached` sends the child's stdio to `/dev/null`** — checked
+in `/proc/<pid>/fd`, not assumed. That is load-bearing: mpv prints
+`Playing: rtsp://admin:<password>@host/live` on stdout when it opens a
+playlist, and `omarchy-shell`'s own stdout is a journal socket. Swapping
+`omarchy-cameras-view` for a `Process` with a `StdioCollector`, or adding any
+redirection to a log, writes camera passwords to disk. `thumbd` sets
+`DEVNULL` explicitly for the same reason. Verified with a canary password:
+nothing in the journal, nothing in the quickshell log.
+
+**Anything on the LAN can reach the ONVIF XML parser**, because discovery
+sweeps every address on the subnet and parses whatever answers on 3702.
+`xml.etree` brings no defences, so `parse_xml` adds the two that matter: a
+1 MiB cap (an uncapped `response.read()` lets a device grow the process without
+limit) and a flat refusal of any payload declaring a DTD. Internal entity
+expansion is the reason — 363 bytes of nested entities measured here expand to
+1 MB in the tree, and each further level multiplies by ten. External entities
+need no handling; ElementTree already refuses them, so this is a DoS, not XXE.
+
+**A URL that reaches a command line has to be a URL.** `curl` reads a leading
+dash as an option — `-o` writes a file, `-K` reads a config file — and the
+Frigate URL is concatenated straight into an argument, so `safeHttpUrl` gates
+it in `parseConfig`. A bare host is filled in with `http://` rather than
+rejected, because curl already assumed that and existing configs rely on it.
+One level down, `GetStreamUri` is answered by the device and the answer becomes
+a playlist entry, so `check_stream_scheme` (in the probe) and `safeStreamUrl`
+(on read) keep `file://` away from the player.
+
+**`cameras.json` is chmod 600 after every write.** It holds no password, but it
+holds every camera's address, stream path and username — the same thing that is
+kept out of argv, and the default umask leaves it 0644 or 0664. `FileView` has
+no permission setting and `atomicWrites` renames a fresh file into place each
+save, so the mode has to be reapplied rather than set once. Drive it from
+`saveConfig` and startup, never from `onLoaded`: chmod touches the file the
+`FileView` is watching, and reacting to that is a loop.
+
+**The path sanitiser is duplicated on purpose.** `Cameras.slug()` is what every
+caller uses, but `thumbd` and `omarchy-cameras-frigate` build paths from that
+name in other languages, and each checks it again (`safe_name`, `check_name`).
+A caller that does not know about `slug` would otherwise turn `../../.bashrc`
+into a path.
+
 **`$XDG_RUNTIME_DIR` has no fallback, on purpose.** It is per-user and 0700,
 and a Wayland session cannot exist without it — the compositor socket is in
 there. The old `${XDG_RUNTIME_DIR:-/tmp}` traded that guarantee for a

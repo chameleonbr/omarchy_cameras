@@ -181,7 +181,26 @@ Item {
     for (var key in patch) next[key] = patch[key]
     configFile.setText(JSON.stringify(next, null, 2) + "\n")
     config = Cameras.parseConfig(JSON.stringify(next))
+    restrictConfig()
   }
+
+  // cameras.json holds no password, but it does hold every camera's address,
+  // its stream path and the account watching it — the same thing that is kept
+  // out of argv for the same reason. The default umask leaves it 0644 or 0664,
+  // readable by every other account on the machine.
+  //
+  // FileView has no permission setting, and atomicWrites renames a fresh file
+  // into place on every save, so the mode has to be reapplied after each write
+  // rather than set once. Driven from saveConfig and from startup, never from
+  // onLoaded: chmod touches the file the FileView is watching, and reacting to
+  // that would be a loop.
+  function restrictConfig() {
+    chmodProcess.running = false
+    chmodProcess.command = ["chmod", "600", configPath]
+    chmodProcess.running = true
+  }
+
+  Process { id: chmodProcess }
 
   // No port argument: the restream port is read back out of Frigate's own
   // camera inputs (see Cameras.restreamPort), so it is not a setting.
@@ -654,7 +673,10 @@ Item {
     }
   }
 
-  Component.onCompleted: checkTools()
+  Component.onCompleted: {
+    checkTools()
+    restrictConfig()
+  }
 
   // Long-running: keeps the visible cameras' JPEGs fresh on disk until stopped.
   Process { id: mirrorProcess }

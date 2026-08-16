@@ -157,4 +157,64 @@ try:
 finally:
     onvif.probe_service = real_probe
 
+
+
+# --- XML from an untrusted device -------------------------------------------
+#
+# Discovery sweeps every address on the local subnet, so anything on the
+# network reaches this parser. xml.etree has no defences of its own, and both
+# of the ones it lacks are cheap to add.
+
+# An entity bomb: 363 bytes on the wire, a megabyte in the tree, and each
+# further level of nesting multiplies that by ten. Measured before the guard
+# went in; the guard is what makes it a ParseError instead.
+BOMB = b"""<?xml version="1.0"?>
+<!DOCTYPE r [
+<!ENTITY a "AAAAAAAAAA">
+<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+<!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
+<!ENTITY e "&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;">
+<!ENTITY f "&e;&e;&e;&e;&e;&e;&e;&e;&e;&e;">
+]>
+<ProbeMatches><ProbeMatch><Scopes>&f;</Scopes></ProbeMatch></ProbeMatches>"""
+
+try:
+    onvif.parse_xml(BOMB)
+    raise AssertionError("an entity bomb must not be expanded")
+except onvif.ET.ParseError:
+    pass
+
+# The discovery path swallows it as "not a device" rather than propagating.
+assert onvif.parse_probe_matches(BOMB) == []
+
+# A body with no cap can be streamed until memory runs out.
+try:
+    onvif.parse_xml(b"<a>" + b"x" * (onvif.MAX_XML + 1) + b"</a>")
+    raise AssertionError("an oversized body must be refused")
+except onvif.ET.ParseError:
+    pass
+
+# Ordinary responses still parse.
+ok = b'<ProbeMatches><ProbeMatch><XAddrs>http://10.0.0.5/onvif/device_service' \
+     b'</XAddrs><Scopes>onvif://www.onvif.org/name/Front</Scopes></ProbeMatch>' \
+     b'</ProbeMatches>'
+assert onvif.parse_xml(ok) is not None
+assert onvif.parse_probe_matches(ok)[0]["name"] == "Front"
+
+# --- the stream URI a device hands back -------------------------------------
+#
+# GetStreamUri is answered by the device, and the answer becomes a playlist
+# entry for mpv, which opens whatever scheme it is given.
+
+for good in ("rtsp://cam/live", "rtsps://cam/live", "http://nvr/api/x"):
+    assert onvif.check_stream_scheme(good) == good
+
+for bad in ("file:///etc/passwd", "/etc/passwd", "javascript:x"):
+    try:
+        onvif.check_stream_scheme(bad)
+        raise AssertionError("must refuse %r as a stream URI" % bad)
+    except RuntimeError:
+        pass
+
 print("ok")

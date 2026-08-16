@@ -56,6 +56,35 @@ PROBE_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 
 # --------------------------------------------------------------- XML helpers
 
+# Anything answering on the local subnet reaches these parsers -- discovery
+# sweeps every address -- so both limits below are about a hostile responder,
+# not a broken camera.
+MAX_XML = 1 << 20
+
+
+def parse_xml(payload):
+    """Parse a SOAP or WS-Discovery response from an untrusted device.
+
+    xml.etree brings no defences of its own. Two are needed:
+
+    A body with no cap can be streamed until memory runs out. And internal
+    entity expansion is an amplifier -- 363 bytes of nested entities measured
+    here expand to 1 MB in the tree, and every further level multiplies that by
+    ten. No ONVIF response carries a DTD, so refusing one costs nothing and
+    removes the whole class.
+
+    External entities need no handling: ElementTree already refuses them
+    ("undefined entity"), so a device cannot read a local file this way.
+
+    Raises ParseError, which every caller already treats as "not a device".
+    """
+    if len(payload) > MAX_XML:
+        raise ET.ParseError("response larger than %d bytes" % MAX_XML)
+    if b"<!DOCTYPE" in payload or b"<!ENTITY" in payload:
+        raise ET.ParseError("response declares a DTD")
+    return ET.fromstring(payload)
+
+
 def local_name(tag):
     """Tag without its namespace. ONVIF devices disagree about prefixes and
     even about which namespace revision they answer in, so every lookup here
@@ -133,7 +162,9 @@ def soap_call(url, body, user="", password="", timeout=6):
         url, data=envelope,
         headers={"Content-Type": "application/soap+xml; charset=utf-8"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return ET.fromstring(response.read())
+        # One byte over the cap is enough for parse_xml to reject it; reading
+        # unbounded is what lets a device grow this process without limit.
+        return parse_xml(response.read(MAX_XML + 1))
 
 
 # ------------------------------------------------------------- discovery
@@ -151,7 +182,7 @@ def scope_value(scopes, kind):
 def parse_probe_matches(payload):
     """Devices described by one ProbeMatches response."""
     try:
-        root = ET.fromstring(payload)
+        root = parse_xml(payload)
     except ET.ParseError:
         return []
 
@@ -343,6 +374,18 @@ def service_xaddrs(root):
     return services
 
 
+# What the viewer may be pointed at. A camera answers GetStreamUri with a URL
+# of its choosing, and that URL becomes a playlist entry for mpv, which opens
+# whatever scheme it is handed -- file:// included.
+STREAM_SCHEMES = ("rtsp", "rtsps", "http", "https")
+
+
+def check_stream_scheme(url):
+    if urllib.parse.urlsplit(url).scheme.lower() not in STREAM_SCHEMES:
+        raise RuntimeError("device returned a stream URI that is not RTSP: " + url)
+    return url
+
+
 def strip_credentials(url):
     """Drop any userinfo a camera echoes back into its own stream URL. The
     password belongs in the keyring, and cameras.json is a plain file."""
@@ -446,7 +489,7 @@ def probe(target, user, password):
         "name": name or host,
         "host": host,
         "xaddr": xaddr,
-        "rtsp": strip_credentials(uri),
+        "rtsp": check_stream_scheme(strip_credentials(uri)),
         "user": user,
         "ptz": "PTZ" in services,
     }
@@ -470,9 +513,10 @@ def main(argv=None):
     find_cmd = commands.add_parser("find")
     find_cmd.add_argument("target")
 
-    url_cmd = commands.add_parser("stream-url")
-    url_cmd.add_argument("rtsp")
-    url_cmd.add_argument("--user", default="")
+    # The URL and username arrive on stdin, one per line. Neither is a secret
+    # on its own, but a stream path and the account watching it have no more
+    # business in the process table than the password does.
+    commands.add_parser("stream-url")
 
     args = parser.parse_args(argv)
 
@@ -490,8 +534,10 @@ def main(argv=None):
         return 0 if xaddr else 1
 
     if args.command == "stream-url":
-        host = urllib.parse.urlsplit(args.rtsp).hostname or ""
-        print(with_credentials(args.rtsp, args.user, lookup_secret(host)))
+        rtsp = sys.stdin.readline().rstrip("\n")
+        user = sys.stdin.readline().rstrip("\n")
+        host = urllib.parse.urlsplit(rtsp).hostname or ""
+        print(with_credentials(rtsp, user, lookup_secret(host)))
         return 0
 
     # Read the password off stdin so it never lands in argv, where every

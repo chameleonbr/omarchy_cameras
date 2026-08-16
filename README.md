@@ -157,6 +157,13 @@ come from one mpv per visible camera, held open and asked for a frame on a
 timer: ONVIF does define a snapshot endpoint, but cameras that advertise one
 and then refuse every request are common enough that it cannot be relied on.
 
+Searching for ONVIF cameras means parsing XML from whatever answers on the
+local network, so the parser caps the response size and refuses any payload
+that declares a DTD — a few hundred bytes of nested XML entities otherwise
+expand to megabytes in memory. A camera also does not get to choose the scheme
+of its own stream URL; only RTSP and HTTP are accepted, so nothing can point
+the player at a local file.
+
 Searching for ONVIF cameras probes every address on the local subnet as well as
 the multicast group. The multicast reply arrives with no matching outbound
 flow, so a default-deny firewall drops it and many Wi-Fi access points never
@@ -211,6 +218,9 @@ one the plugin cannot fix — whether the server offers HTTPS is up to the
 server — so it is a warning rather than a refusal, since a Frigate on plain
 HTTP over a home LAN is an ordinary setup. ONVIF is unaffected either way: its
 WS-Security authentication sends a hash of the password, never the password.
+
+`cameras.json` never holds a password, but it does hold camera addresses and
+usernames, so it is kept at mode 600.
 
 Thumbnails and cookies are written under `$XDG_RUNTIME_DIR`, which is per-user
 and 0700. There is no fallback to `/tmp`: the helpers refuse to run rather than

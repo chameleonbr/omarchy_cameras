@@ -39,6 +39,17 @@ else
   mkdir -m 700 "$RUNTIME" || exit 1
 fi
 
+# A camera name that can only ever be a file in the runtime directory. The
+# caller already runs names through Cameras.slug(), but that guard is in
+# another language in another file; a caller that does not know about it would
+# otherwise turn "../../.bashrc" into a path.
+check_name() {
+  case "$1" in
+    ""|.|..)      echo "unusable camera name: $1" >&2; exit 1 ;;
+    *[!A-Za-z0-9._-]*) echo "unusable camera name: $1" >&2; exit 1 ;;
+  esac
+}
+
 host_of() {
   # scheme://[user@]host[:port]/... -> host
   local rest="${1#*://}"
@@ -104,6 +115,7 @@ case "${1:-}" in
     user="${3-}"
     path="${4:?usage: save <base-url> <user> <path> <name>}"
     name="${5:?usage: save <base-url> <user> <path> <name>}"
+    check_name "$name"
     tmp="$RUNTIME/.$name.jpg.part"
     if fetch "$base" "$user" "$path" "$tmp"; then
       mv -f "$tmp" "$RUNTIME/$name.jpg"
@@ -121,6 +133,7 @@ case "${1:-}" in
     interval="${4:?usage: mirror <base-url> <user> <interval> <name=path>...}"
     shift 4
     (( $# )) || exit 0
+    for spec in "$@"; do check_name "${spec%%=*}"; done
 
     # Write to a temp file and rename, so a half-downloaded frame is never
     # what QML picks up mid-read.

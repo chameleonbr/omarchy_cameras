@@ -15,9 +15,12 @@ stream="${2:?usage: omarchy-cameras-view <name> <stream-url> [onvif-user]}"
 user="${3:-}"
 
 if [[ -n "$user" ]]; then
-  # Failure here is not fatal: an open camera still plays, and mpv reports the
-  # 401 far more clearly than this script could.
-  stream="$("$(dirname "$0")/omarchy-cameras-onvif" stream-url "$stream" --user "$user" 2>/dev/null || echo "$stream")"
+  # URL and username go in on stdin, not argv: /proc is world-readable, and a
+  # stream path plus the account watching it is worth as little exposure as the
+  # password itself. Failure here is not fatal -- an open camera still plays,
+  # and mpv reports a 401 far more clearly than this script could.
+  stream="$(printf '%s\n%s\n' "$stream" "$user" \
+    | "$(dirname "$0")/omarchy-cameras-onvif" stream-url 2>/dev/null || echo "$stream")"
 fi
 
 # --profile=low-latency drops mpv's buffering to near zero; without it an RTSP

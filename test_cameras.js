@@ -197,7 +197,11 @@ assert.equal(describeMissingTools(["nonsense"]), "Missing command: nonsense",
 {
   const cmd = toolCheckCommand()
   assert.equal(cmd[0], "bash")
-  for (const t of REQUIRED_TOOLS) assert.ok(cmd[2].includes(t.name), t.name)
+  // The names are positional arguments, not interpolated into the script, so
+  // the script itself is a constant and the tools are everything after $0.
+  assert.ok(!/curl|mpv|python3/.test(cmd[2]), "no tool name is spliced into the script")
+  const asked = cmd.slice(4)
+  for (const t of REQUIRED_TOOLS) assert.ok(asked.includes(t.name), t.name)
 }
 
 // --- hostOf ----------------------------------------------------------------
@@ -434,4 +438,58 @@ console.log("ok")
   assert.deepEqual(insecureWarnings(null, null), [], "junk in must not throw")
   assert.equal(insecureWarnings(cfg("", ""), { host: "", user: "u", tls: false }).length, 0,
     "nothing configured yet is not a warning")
+}
+
+// --- URLs reach a command line, so they have to be URLs ---------------------
+//
+// The Frigate URL is concatenated into a curl argument and curl reads a
+// leading dash as an option; the stream URL becomes a playlist entry and mpv
+// opens any scheme it is handed. Neither is a privilege boundary on a
+// single-user desktop — the point is that a value that is not a URL never
+// reaches a program that would do something else with it.
+
+{
+  assert.equal(safeHttpUrl("http://nvr:5000/"), "http://nvr:5000")
+  assert.equal(safeHttpUrl("https://nvr.lan"), "https://nvr.lan")
+
+  // A bare host is what people type, and curl already assumed http for it.
+  assert.equal(safeHttpUrl("nvr.lan:5000"), "http://nvr.lan:5000",
+    "an existing config without a scheme must keep working")
+  assert.equal(safeHttpUrl("192.168.31.5:5000/x"), "http://192.168.31.5:5000/x")
+
+  assert.equal(safeHttpUrl("-o/home/me/.bashrc"), "",
+    "curl would read this as an option, not an address")
+  assert.equal(safeHttpUrl("-K/tmp/curlrc"), "")
+  assert.equal(safeHttpUrl("file:///etc/passwd"), "")
+  assert.equal(safeHttpUrl("http://nvr /x"), "", "no whitespace to split on")
+  assert.equal(safeHttpUrl(""), "")
+  assert.equal(safeHttpUrl(null), "")
+
+  assert.equal(parseConfig('{"frigate":{"url":"-o/tmp/x"}}').frigate.url, "",
+    "and parseConfig is where that is enforced")
+  assert.equal(parseConfig('{"frigate":{"url":"nvr:5000"}}').frigate.url,
+    "http://nvr:5000")
+}
+
+{
+  assert.equal(safeStreamUrl("rtsp://cam/live"), "rtsp://cam/live")
+  assert.equal(safeStreamUrl("rtsps://cam/live"), "rtsps://cam/live")
+  assert.equal(safeStreamUrl("http://nvr/api/x"), "http://nvr/api/x",
+    "Frigate's MJPEG endpoint is a stream too")
+  assert.equal(safeStreamUrl("file:///home/me/.ssh/id_rsa"), "",
+    "a camera does not get to point the player at a local file")
+  assert.equal(safeStreamUrl("javascript:x"), "")
+  assert.equal(safeStreamUrl(""), "")
+
+  // A cached entry written before the probe checked, or hand-edited, is
+  // filtered on read as well as on write.
+  const cfg = parseConfig(JSON.stringify({
+    sources: { onvif: true },
+    onvif: [
+      { name: "good", rtsp: "rtsp://cam/live", user: "admin" },
+      { name: "bad", rtsp: "file:///etc/passwd", user: "admin" }
+    ]
+  }))
+  assert.deepEqual(onvifCameras(cfg, "/run/user/1000/omarchy-cameras")
+    .map(c => c.name), ["good"])
 }

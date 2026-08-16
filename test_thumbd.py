@@ -73,4 +73,19 @@ with tempfile.TemporaryDirectory() as tmp:
     (loose / "omarchy-cameras").mkdir(mode=0o755)
     refuses(loose, "a world-readable directory must not be reused")
 
+# --- camera names only ever name a file in that directory -------------------
+#
+# Callers sanitise with Cameras.slug(), but that guard is in another language
+# in another file. This one sits next to the code that builds the path.
+
+for good in ("front-door", "192.168.31.155", "cam_1", "a.b"):
+    assert thumbd.safe_name(good) == good
+
+for bad in ("", ".", "..", "../../../home/me/.bashrc", "a/b", "a b", "a\x00b"):
+    try:
+        thumbd.safe_name(bad)
+        raise AssertionError("must refuse %r as a camera name" % bad)
+    except RuntimeError:
+        pass
+
 print("ok")
