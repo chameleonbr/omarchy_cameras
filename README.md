@@ -75,8 +75,9 @@ jumps straight to one camera.
 ## Motion alerts
 
 Off by default. Once armed, a small preview of whichever camera tripped appears
-for a few seconds and then goes away; selecting it opens that camera full size.
-Several detections stack, oldest on top.
+for a few seconds and then goes away; selecting it opens that camera full size,
+and right-clicking it dismisses just that preview. Several detections stack,
+oldest on top.
 
 The preview is the still Frigate saved for the event, with its bounding box and
 label drawn on. Alerts fire while the detection is still happening rather than

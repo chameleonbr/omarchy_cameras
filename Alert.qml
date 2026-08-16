@@ -26,6 +26,7 @@ PanelWindow {
   property int barClearance: Style.bar.sizeHorizontal
 
   signal activated(int index)
+  signal dismissed(int index)
   signal expired(int index)
 
   readonly property int previewHeight: Math.round(previewWidth * 9 / 16)
@@ -92,6 +93,7 @@ PanelWindow {
         source: imageUrl
         caption: cameraName + (label ? "  ·  " + label : "")
         onClicked: root.activated(card.index)
+        onDismissed: root.dismissed(card.index)
 
         // Each card times out from when it appeared, so one that arrives late
         // gets its full time on screen instead of inheriting what is left of

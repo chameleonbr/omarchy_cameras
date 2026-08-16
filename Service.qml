@@ -823,6 +823,7 @@ Item {
     position: root.config.alerts.position
     durationSec: root.config.alerts.durationSec
     onExpired: function(index) { root.dismissAlert(index) }
+    onDismissed: function(index) { root.dismissAlert(index) }
     onActivated: function(index) {
       var cameraId = alertModel.get(index).cameraId
       root.dismissAlert(index)

@@ -17,6 +17,7 @@ Rectangle {
   property bool placeholder: false
 
   signal clicked()
+  signal dismissed()
 
   height: previewHeight + captionText.implicitHeight + Style.space(10)
   radius: Style.cornerRadius
@@ -72,10 +73,18 @@ Rectangle {
   }
 
   // A rehearsal is not clickable: there is no camera behind it to open.
+  //
+  // Right-click dismisses just this card. The alternative to waiting out the
+  // timer used to be opening the camera, which is a lot to do to make a
+  // preview go away.
   MouseArea {
     anchors.fill: parent
     visible: !root.placeholder
     cursorShape: Qt.PointingHandCursor
-    onClicked: root.clicked()
+    acceptedButtons: Qt.LeftButton | Qt.RightButton
+    onClicked: function(mouse) {
+      if (mouse.button === Qt.RightButton) root.dismissed()
+      else root.clicked()
+    }
   }
 }
