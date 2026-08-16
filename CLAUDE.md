@@ -340,6 +340,16 @@ feeds itself from the restream, so its own ffmpeg input is
 `rtsp://127.0.0.1:<port>/<name>` — `Cameras.restreamPort` reads it back out.
 Before adding a setting, check whether Frigate already knows the answer.
 
+**Do not reset `eventsSynced` when the polling `Timer` starts.** That timer
+also starts when MQTT drops, and the reset makes the next `applyEvents` mark
+every in-progress detection as seen and return without alerting — so a
+reconnect loses whatever was in frame at that moment rather than delaying it.
+The reset belongs on the transition into watching (`watchingEvents`, alerts
+armed and Frigate on), which is the case that genuinely has a backlog. Nothing
+double-alerts after a reconnect: what MQTT already delivered is in
+`seenEvents`, and `newEvents` filters on id. `omarchy-shell avila.cameras mqtt
+""` reports `synced=` so this is visible from outside.
+
 **Prune `seenEvents` before re-marking the payload, never after.** A detection
 can stay in progress for hours — a parked car, a bicycle left in frame — and
 `pruneSeen(seen, newest - 600)` will happily drop an id that is still being

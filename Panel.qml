@@ -230,6 +230,10 @@ Panel {
         + " active=" + root.service.mqttWanted
         + " procRunning=" + root.service.mqttRunning
         + " connected=" + root.service.mqttConnected
+        // False means the next reply is absorbed as backlog instead of
+        // alerted. It should only ever be false right after alerts are armed,
+        // never after a reconnect — that distinction is invisible otherwise.
+        + " synced=" + root.service.eventsSynced
         + " broker=\"" + info.host + ":" + info.port + "\""
         + " frigateMqtt=" + info.enabled
         + " user=\"" + info.user + "\""

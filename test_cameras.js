@@ -493,3 +493,32 @@ console.log("ok")
   assert.deepEqual(onvifCameras(cfg, "/run/user/1000/omarchy-cameras")
     .map(c => c.name), ["good"])
 }
+
+// --- an MQTT reconnect must not replay what MQTT already delivered ----------
+//
+// Polling takes over whenever the broker is not connected, and the first poll
+// after a drop asks for everything still in progress — including detections
+// already alerted over MQTT moments earlier. The service no longer discards
+// that first reply (doing so lost live detections outright), so id dedup is
+// what keeps it from alerting twice. This asserts the property that fix rests
+// on.
+
+{
+  const live = JSON.stringify([
+    { id: "already-seen", camera: "porta", label: "person",
+      start_time: 1000, end_time: null },
+    { id: "started-during-the-gap", camera: "quintal", label: "person",
+      start_time: 1004, end_time: null }
+  ])
+
+  // MQTT delivered the first one before the broker dropped.
+  const seen = { "already-seen": 1000 }
+
+  const result = newEvents(live, ["person"], seen)
+  assert.deepEqual(result.events.map(e => e.id), ["started-during-the-gap"],
+    "the poll after a reconnect alerts only what MQTT never got to deliver")
+
+  // And the detection that arrived while nothing was connected is a real
+  // alert, not backlog — the whole point of not discarding the first reply.
+  assert.equal(result.events[0].inProgress, true)
+}

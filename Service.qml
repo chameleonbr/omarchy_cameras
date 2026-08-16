@@ -329,6 +329,21 @@ Item {
   // or arming alerts after they have been off, must not replay the backlog.
   property bool eventsSynced: false
 
+  // Whether detections are being watched at all. Only a transition into this
+  // resets the sync: going from not watching to watching means everything
+  // Frigate has is history, and replaying it would put a column of stale
+  // previews on screen.
+  //
+  // Deliberately not tied to the polling Timer, which also starts when MQTT
+  // drops. That is not a transition into watching — alerts were already armed
+  // and whatever is in frame right now is live news, not backlog. Resetting
+  // there made the first poll after every reconnect mark those detections seen
+  // and return without alerting, losing them outright rather than delaying
+  // them. Re-alerting is not a risk: anything MQTT already delivered is in
+  // seenEvents, and newEvents filters on id.
+  readonly property bool watchingEvents: config.alerts.enabled && frigateOn
+  onWatchingEventsChanged: if (watchingEvents) eventsSynced = false
+
   // ---------------------------------------------------------------- mqtt
   //
   // Frigate publishes a detection the instant it makes it, which is several
@@ -658,9 +673,6 @@ Item {
     running: root.config.alerts.enabled && root.frigateOn && !root.mqttConnected
     repeat: true
     triggeredOnStart: true
-    // Arming alerts starts a fresh sync, so whatever happened while they were
-    // off stays off the screen.
-    onRunningChanged: if (running) root.eventsSynced = false
     onTriggered: root.pollEvents()
   }
 
