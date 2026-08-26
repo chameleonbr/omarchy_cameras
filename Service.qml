@@ -31,6 +31,19 @@ Item {
   property bool loading: false
   property string lastError: ""
 
+  // Set by the shell when it creates this service (shell.qml:306), which is
+  // the only way a plugin service reaches another plugin's service.
+  property var shell: null
+
+  // Do Not Disturb, straight off the first-party notifications service — the
+  // same switch the bar's 󰂛 indicator flips. A motion preview is a
+  // notification in every way that matters to someone who just silenced the
+  // desktop, so it obeys the same setting.
+  readonly property var notificationService:
+    shell ? shell.firstPartyServiceFor("omarchy.notifications") : null
+  readonly property bool doNotDisturb:
+    notificationService ? notificationService.doNotDisturb === true : false
+
   // Event alerts. A non-empty alertModel is what puts previews on screen.
   property bool placementVisible: false
   property real lastAlertLatency: -1
@@ -471,7 +484,16 @@ Item {
     for (var j = 0; j < result.events.length; j++) pushAlert(result.events[j])
   }
 
+  // Silenced detections are dropped, not queued. The notifications service
+  // keeps what it suppressed so it can be read later; a camera preview is a
+  // live still of something that has already left the frame, and showing a
+  // stack of them the moment DND comes off is worse than having missed them.
+  // The event still goes into seenEvents on the way here, so nothing replays.
+  onDoNotDisturbChanged: if (doNotDisturb) dismissAllAlerts()
+
   function pushAlert(event) {
+    if (doNotDisturb) return
+
     var camera = null
     for (var i = 0; i < cameras.length; i++) {
       if (cameras[i].name === event.camera) { camera = cameras[i]; break }

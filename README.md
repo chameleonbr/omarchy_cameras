@@ -81,6 +81,11 @@ for a few seconds and then goes away; selecting it opens that camera full size,
 and right-clicking it dismisses just that preview. Several detections stack,
 oldest on top.
 
+Silencing notifications silences these too: while the bar's 󰂛 indicator is on,
+no preview appears and any preview already on screen goes away. Detections
+during that time are dropped rather than queued — a still of something that
+has already left the frame is not worth showing later.
+
 The preview is the still Frigate saved for the event, with its bounding box and
 label drawn on. Alerts fire while the detection is still happening rather than
 after it ends, so the preview arrives in seconds instead of after the subject

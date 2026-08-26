@@ -103,6 +103,13 @@ Do not try to merge these.
 
 ## Traps this codebase has already hit
 
+**A plugin service reaches another plugin's service through `shell`.**
+`shell.qml:306` assigns it on creation if the object declares the property, so
+`property var shell: null` in `Service.qml` is what makes
+`shell.firstPartyServiceFor("omarchy.notifications").doNotDisturb` reachable —
+which is how motion previews obey the desktop's Do Not Disturb switch. The bar
+widget has its own route (`bar.shell`) and does not need this.
+
 **Do not add `panel`, `overlay`, or `menu` to `manifest.json`'s `kinds`.**
 `isBarWidgetPanelPlugin` (`shell.qml:426`) returns false for any plugin
 declaring one of those, which reroutes `omarchy-shell shell toggle

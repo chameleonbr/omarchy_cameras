@@ -247,6 +247,10 @@ Panel {
       return "opened=" + root.opened
         + " view=" + root.view
         + " cameras=" + names.length
+        // Silenced desktop means silenced camera previews; without this the
+        // only way to tell them apart is to wait for a detection that never
+        // shows up.
+        + " dnd=" + root.service.doNotDisturb
         + " frigate=\"" + root.service.config.frigate.url + "\""
         + " names=[" + names.join(",") + "]"
         + (root.service.lastError ? " error=\"" + root.service.lastError + "\"" : "")
