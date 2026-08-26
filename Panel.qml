@@ -325,11 +325,10 @@ Panel {
     // theme's accent instead. Still the palette, still follows a theme change.
     active: root.alertsOn
     activeColor: root.accent
-    tooltipText: (root.hasCameras
-      ? root.cameras.length + (root.cameras.length === 1 ? " camera" : " cameras")
-      : "No cameras configured")
-      + (root.alertsOn ? "  ·  alerts on" : "")
-      + (root.frigateUrl ? "  ·  right-click opens Frigate" : "")
+    // Just the name. The camera count and the alert state are already on the
+    // icon and in the popup, and a tooltip that reports them turns every pass
+    // of the mouse across the bar into a status panel nobody asked for.
+    tooltipText: "Cameras"
     onPressed: function(code) {
       // Everything the popup shows about a Frigate camera is a still. The web
       // UI is where recordings and the event history are, and it is a browser
