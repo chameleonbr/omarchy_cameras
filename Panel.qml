@@ -32,7 +32,16 @@ Panel {
   // "grid" or "config".
   property string view: "grid"
 
-  readonly property int columns: clampSetting("columns", 2, 1, 4)
+  // Empty unless Frigate is both on and configured — the right-click that
+  // opens it falls back to a refresh otherwise.
+  readonly property string frigateUrl: service && service.config.sources.frigate
+    ? service.config.frigate.url : ""
+
+  function openFrigate() {
+    if (frigateUrl) Quickshell.execDetached(["xdg-open", frigateUrl])
+  }
+
+  readonly property int columns: clampSetting("columns", 3, 1, 4)
   readonly property int thumbIntervalMs: clampSetting("thumbIntervalMs", 2000, 500, 30000)
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -74,10 +83,15 @@ Panel {
     }
   }
 
-  readonly property int tileWidth: Style.space(170)
-  readonly property int tileHeight: Math.round(tileWidth * 9 / 16)
+  // The popup is the same width whatever the column count: the tiles divide
+  // that width rather than defining it, so raising `columns` buys more cameras
+  // on screen instead of a wider panel.
+  readonly property int gridWidth: Style.space(348)
   readonly property int tileSpacing: Style.space(8)
-  readonly property int gridWidth: columns * tileWidth + (columns - 1) * tileSpacing
+  readonly property int tileWidth:
+    Math.floor((gridWidth - (columns - 1) * tileSpacing) / columns)
+  readonly property int tileHeight: Math.round(tileWidth * 9 / 16)
+  readonly property int featuredHeight: Math.round(gridWidth * 9 / 16)
 
   // Monitors to choose from for the alert preview, straight off the
   // compositor so an unplugged display disappears from the list.
@@ -92,6 +106,12 @@ Panel {
 
   property int cursor: 0
   property bool cursorActive: false
+  // The camera shown big at the top of the grid. A tile that small is enough
+  // to tell that something moved and not enough to tell what, so one of them
+  // is always full width; picking another tile promotes it here.
+  property int featured: 0
+  readonly property var featuredCamera: hasCameras
+    ? cameras[Math.max(0, Math.min(featured, cameras.length - 1))] : null
   // Bumped on a timer to defeat Image's URL cache; see Cameras.thumbSource.
   property int tick: 0
 
@@ -108,12 +128,24 @@ Panel {
     cursor = Math.max(0, Math.min(cameras.length - 1, next))
   }
 
+  // Keyboard mirror of the mouse: a tile that is not featured gets promoted,
+  // the featured one opens in mpv. Two steps to full screen either way.
   function activateCursor() {
-    if (view === "config" || !hasCameras || !service) return
-    var camera = cameras[Math.max(0, Math.min(cursor, cameras.length - 1))]
-    service.view(camera.id)
+    if (view === "config" || !hasCameras) return
+    var index = Math.max(0, Math.min(cursor, cameras.length - 1))
+    if (index !== featured) { featured = index; return }
+    openFeatured()
+  }
+
+  function openFeatured() {
+    if (!service || !featuredCamera) return
+    service.view(featuredCamera.id)
     root.close()
   }
+
+  // A camera list that shrank must not leave the big tile pointing past its
+  // end — the popup would open on an empty frame with no way to tell why.
+  onCamerasChanged: if (featured >= cameras.length) featured = 0
 
   // The form is uncontrolled while it is open — binding the fields straight to
   // the config would rewrite what the user is typing on every file reload — so
@@ -143,7 +175,9 @@ Panel {
 
   onOpenedChanged: if (opened) {
     cursorActive = false
-    cursor = 0
+    // Start on whatever is already featured, so the first Enter opens the big
+    // tile rather than promoting a different camera over it.
+    cursor = Math.max(0, Math.min(featured, cameras.length - 1))
     tick++
     if (service) service.refresh()
     // Land on setup when there is nothing to show yet: an empty grid with no
@@ -295,8 +329,13 @@ Panel {
       ? root.cameras.length + (root.cameras.length === 1 ? " camera" : " cameras")
       : "No cameras configured")
       + (root.alertsOn ? "  ·  alerts on" : "")
+      + (root.frigateUrl ? "  ·  right-click opens Frigate" : "")
     onPressed: function(code) {
-      if (code === Qt.RightButton && root.service) root.service.refresh()
+      // Everything the popup shows about a Frigate camera is a still. The web
+      // UI is where recordings and the event history are, and it is a browser
+      // away, so the bar icon is the shortest route to it.
+      if (code === Qt.RightButton && root.frigateUrl) root.openFrigate()
+      else if (code === Qt.RightButton && root.service) root.service.refresh()
       else if (code === Qt.MiddleButton && root.service) root.service.setAlertsEnabled(!root.alertsOn)
       else root.toggle()
     }
@@ -419,6 +458,63 @@ Panel {
 
           // ---------------------------------------------------------- grid
 
+          // The featured camera, full grid width. Clicking it is the second
+          // step to mpv; the small tiles below only ever promote into here.
+          Rectangle {
+            visible: root.view === "grid" && root.hasCameras
+            width: root.gridWidth
+            height: root.featuredHeight
+            radius: Style.cornerRadius
+            clip: true
+            color: Qt.darker(Color.popups.background, 1.3)
+
+            CameraThumb {
+              id: featuredThumb
+              anchors.fill: parent
+              camera: root.featuredCamera
+              tick: root.tick
+              active: root.opened && root.view === "grid"
+            }
+
+            Text {
+              anchors.centerIn: parent
+              visible: !featuredThumb.hasFrame
+              text: "󰞮"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.display
+            }
+
+            // Over the picture rather than under it: the tile is as tall as
+            // the popup can afford, and a caption row underneath would come
+            // out of the frame.
+            Rectangle {
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
+              height: featuredName.implicitHeight + Style.space(6)
+              color: Qt.rgba(0, 0, 0, 0.55)
+
+              Text {
+                id: featuredName
+                anchors.centerIn: parent
+                width: parent.width - Style.space(16)
+                elide: Text.ElideRight
+                text: root.featuredCamera
+                  ? root.featuredCamera.name + "  ·  click to open" : ""
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.openFeatured()
+            }
+          }
+
           Grid {
             visible: root.view === "grid"
             columns: root.columns
@@ -436,8 +532,13 @@ Panel {
                 height: root.tileHeight + nameLabel.implicitHeight + Style.space(4)
                 color: "transparent"
                 radius: Style.cornerRadius
-                border.width: root.cursorActive && root.cursor === index ? Math.max(1, Style.space(2)) : 0
-                border.color: root.foreground
+                // Two marks that can be on at once: the accent says which
+                // camera is up top, the plain border says where the keyboard
+                // is. Same border, so they never fight over the same pixels.
+                border.width: (root.featured === index
+                  || (root.cursorActive && root.cursor === index))
+                  ? Math.max(1, Style.space(2)) : 0
+                border.color: root.featured === index ? root.accent : root.foreground
 
                 Rectangle {
                   id: frame
@@ -485,7 +586,7 @@ Panel {
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onEntered: { root.cursorActive = true; root.cursor = tile.index }
-                  onClicked: { root.cursor = tile.index; root.activateCursor() }
+                  onClicked: { root.cursor = tile.index; root.featured = tile.index }
                 }
               }
             }

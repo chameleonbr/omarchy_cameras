@@ -1,8 +1,8 @@
 # Cameras for Omarchy
 
-Watch your cameras without leaving the Omarchy bar. The plugin shows a grid of
-live thumbnails, opens any camera full size in mpv, and pops up a preview the
-moment Frigate detects something. Cameras come from Frigate, from ONVIF
+Watch your cameras without leaving the Omarchy bar. The plugin shows one
+camera large with the rest as live thumbnails below it, opens any of them full
+size in mpv, and pops up a preview the moment Frigate detects something. Cameras come from Frigate, from ONVIF
 discovery on the local network, or from both.
 
 ![Camera grid in the Omarchy bar](preview.png)
@@ -53,17 +53,19 @@ Passwords go to the system keyring, never to the config file.
 
 ## Use
 
-- Select any tile to open that camera in mpv. Press `f` there for fullscreen,
-  `q` to close.
+- Select a small tile to move that camera into the large frame at the top.
+- Select the large frame to open that camera in mpv. Press `f` there for
+  fullscreen, `q` to close.
 - Select **Detection on/off** to arm or disarm motion alerts. While armed the
   bar icon takes the theme's accent color.
 - Middle-click the bar icon to arm or disarm without opening anything.
-- Right-click the bar icon to refresh.
+- Right-click the bar icon to open Frigate in the browser (it refreshes
+  instead when no Frigate is configured).
 
 | Key     | Action                   |
 | ------- | ------------------------ |
 | arrows  | move between cameras     |
-| `Enter` | open the selected camera |
+| `Enter` | enlarge the selected camera, or open it when it is already enlarged |
 | `R`     | refresh                  |
 | `C`     | show or hide Config      |
 | `Esc`   | close                    |
@@ -139,7 +141,7 @@ reports it (`DP-1`, `HDMI-A-1`); empty means the first screen. `onvif[]` is
 written by the config screen, but hand-editing is fine —
 `{"name": …, "rtsp": …, "user": …, "ptz": true|false, "xaddr": …}`.
 
-Grid columns and thumbnail refresh live on the bar widget entry in
+Thumbnail columns and refresh interval live on the bar widget entry in
 `~/.config/omarchy/shell.json`, or in Setup > Plugins.
 
 ## How it works

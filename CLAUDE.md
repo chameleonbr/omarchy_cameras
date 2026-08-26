@@ -163,6 +163,25 @@ writing.
 while the new file loads, so a polled JPEG blinks on every tick. `CameraThumb`
 double-buffers and swaps only once the incoming frame is `Ready`.
 
+**A rebuilt `cameras` array is not a changed camera.** The popup calls
+`service.refresh()` every time it opens, and that builds fresh JS objects, so a
+`CameraThumb` reacting to `onCameraChanged` by clearing both images blanks the
+entire grid on every open and leaves it empty until the next fetch lands —
+which reads as "the plugin takes seconds to show anything". Compare
+`camera.id`, not the object.
+
+**The popup's width is fixed and the tiles divide it.** `gridWidth` is the
+constant; `tileWidth` is derived from it and the column count. Raising
+`columns` buys more cameras on screen, never a wider panel. The featured tile
+at the top is one `gridWidth` wide, which is why thumbnails are fetched at
+`Cameras.THUMB_HEIGHT` rather than at tile height.
+
+**`omarchy-cameras-frigate mirror` fetches a round in parallel.** Sequentially,
+the last tile of nine waits for the sum of nine fetches, and a camera that has
+dropped off the network holds up everything behind it for the full curl
+timeout. The round logs in once before the first fetch, or every camera
+discovers the 401 at the same instant and posts its own login.
+
 **Do not pass `--fs` to mpv.** Omarchy floats, centers and sizes everything of
 class `mpv` at 875x600 (`$OMARCHY_PATH/default/hypr/apps/system.lua`). `--fs`
 fights that rule, and mpv re-asserts fullscreen on stream changes, so the

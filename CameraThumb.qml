@@ -25,13 +25,22 @@ Item {
 
   onTickChanged: load()
   onCameraChanged: {
-    // A different camera has nothing to hold over — drop both frames rather
-    // than leaving the previous camera's picture up during the load.
-    imageA.source = ""
-    imageB.source = ""
-    _frontIsA = true
+    // Only a *different* camera has nothing to hold over. `cameras` is rebuilt
+    // from scratch on every refresh, so comparing the objects would drop the
+    // painted frame each time the panel opens and blank the whole grid until
+    // the next fetch lands — which is exactly the delay this component exists
+    // to avoid.
+    var id = camera ? String(camera.id) : ""
+    if (id !== _loadedId) {
+      imageA.source = ""
+      imageB.source = ""
+      _frontIsA = true
+      _loadedId = id
+    }
     load()
   }
+
+  property string _loadedId: ""
 
   function load() {
     if (!active || !camera) return

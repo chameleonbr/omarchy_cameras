@@ -120,7 +120,7 @@ class Camera:
         self.process = subprocess.Popen(
             ["mpv", "--playlist=/dev/fd/%d" % read_fd,
              "--input-ipc-server=%s" % self.socket_path,
-             "--rtsp-transport=tcp", "--vf=scale=-2:180",
+             "--rtsp-transport=tcp", "--vf=scale=-2:360",
              "--screenshot-format=jpg", "--screenshot-jpeg-quality=80",
              "--vo=null", "--no-audio", "--profile=low-latency",
              "--idle=no", "--really-quiet"],

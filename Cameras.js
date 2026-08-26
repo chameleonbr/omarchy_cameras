@@ -25,6 +25,11 @@ var DEFAULT_CONFIG = {
 
 var ALERT_POSITIONS = ["top-left", "top-center", "top-right"]
 
+// Pixel height every thumbnail is fetched at. The grid tiles are far smaller
+// than this, but the same picture is also what fills the featured tile at the
+// top of the popup, which is the width of the whole grid.
+var THUMB_HEIGHT = 360
+
 // Every external command the plugin shells out to, and what stops working
 // without it. Omarchy ships mpv, jq and libsecret; curl and python3 arrive as
 // dependencies of other packages rather than in its own lists, so a lean
@@ -35,7 +40,8 @@ var REQUIRED_TOOLS = [
   { name: "mpv", need: "opening a camera, and ONVIF thumbnails" },
   { name: "jq", need: "logging in to an authenticated Frigate" },
   { name: "secret-tool", need: "storing passwords" },
-  { name: "python3", need: "MQTT alerts and ONVIF discovery" }
+  { name: "python3", need: "MQTT alerts and ONVIF discovery" },
+  { name: "xdg-open", need: "opening the Frigate web UI" }
 ]
 
 // One shell command that prints the name of each tool that is not on PATH.
@@ -504,7 +510,8 @@ function mirrorSpecs(cameras) {
   return cameras.filter(function(camera) {
     return camera.source === "frigate" && camera.thumbKind === "file"
   }).map(function(camera) {
-    return slug(camera.name) + "=/api/" + encodeURIComponent(camera.name) + "/latest.jpg"
+    return slug(camera.name) + "=/api/" + encodeURIComponent(camera.name)
+      + "/latest.jpg?h=" + THUMB_HEIGHT
   })
 }
 
@@ -536,5 +543,5 @@ function eventImageUrl(frigateUrl, event) {
 function thumbSource(camera, tick) {
   if (!camera) return ""
   if (camera.thumbKind === "file") return "file://" + camera.thumb + "?t=" + tick
-  return camera.thumb + "?h=180&t=" + tick
+  return camera.thumb + "?h=" + THUMB_HEIGHT + "&t=" + tick
 }

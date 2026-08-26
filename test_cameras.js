@@ -291,8 +291,12 @@ assert.equal(authedCams[0].stream, "rtsp://nvr.lan:8554/garagem",
   "auth changes where the picture comes from, not the stream")
 assert.equal(fromFrigate[0].thumbKind, "url", "no login means no mirror process")
 
+// The height matters: latest.jpg is the full frame otherwise, and nine of
+// those is megabytes fetched every couple of seconds to fill tiles a few
+// hundred pixels wide. The spec is split on the first "=", so a query string
+// rides along safely.
 assert.deepEqual(mirrorSpecs(authedCams),
-  ["garagem=/api/garagem/latest.jpg", "quintal=/api/quintal/latest.jpg"])
+  ["garagem=/api/garagem/latest.jpg?h=360", "quintal=/api/quintal/latest.jpg?h=360"])
 assert.deepEqual(mirrorSpecs(fromFrigate), [], "nothing to mirror without auth")
 
 // --- onvifThumbSpecs -------------------------------------------------------
@@ -323,7 +327,7 @@ assert.deepEqual(mirrorSpecs(fromFrigate), [], "nothing to mirror without auth")
 }
 assert.deepEqual(
   mirrorSpecs(frigateCameras(JSON.stringify({ cameras: { "back yard": {} } }), authed, "/run")),
-  ["back_yard=/api/back%20yard/latest.jpg"],
+  ["back_yard=/api/back%20yard/latest.jpg?h=360"],
   "the file name is slugged but the URL keeps the real name")
 
 assert.equal(parseConfig('{"frigate":{"user":"admin"}}').frigate.user, "admin")
@@ -362,7 +366,7 @@ assert.deepEqual(merged.map(c => c.name), ["garagem", "quintal", "Portão Latera
 // --- thumbSource -----------------------------------------------------------
 
 assert.equal(thumbSource(fromFrigate[0], 7),
-  "http://nvr.lan:5000/api/garagem/latest.jpg?h=180&t=7")
+  "http://nvr.lan:5000/api/garagem/latest.jpg?h=360&t=7")
 assert.equal(thumbSource(fromOnvif[0], 7),
   "file:///run/user/1000/omarchy-cameras/Port_o_Lateral.jpg?t=7")
 assert.notEqual(thumbSource(fromFrigate[0], 7), thumbSource(fromFrigate[0], 8),

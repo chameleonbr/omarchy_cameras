@@ -135,19 +135,33 @@ case "${1:-}" in
     (( $# )) || exit 0
     for spec in "$@"; do check_name "${spec%%=*}"; done
 
+    # Log in once up front. Otherwise the first round discovers the 401 in
+    # every camera at the same moment and posts as many logins as there are
+    # cameras.
+    if [[ -n "$user" && ! -f "$(jar_for "$base")" ]]; then
+      login "$base" "$user"
+    fi
+
     # Write to a temp file and rename, so a half-downloaded frame is never
     # what QML picks up mid-read.
+    #
+    # The round is parallel: sequentially, a grid of nine waits for the sum of
+    # nine fetches before its last tile has anything, and one camera that has
+    # gone off the network holds up every tile behind it for the full timeout.
     while true; do
       for spec in "$@"; do
-        name="${spec%%=*}"
-        path="${spec#*=}"
-        tmp="$RUNTIME/.$name.jpg.part"
-        if fetch "$base" "$user" "$path" "$tmp"; then
-          mv -f "$tmp" "$RUNTIME/$name.jpg"
-        else
-          rm -f "$tmp"
-        fi
+        (
+          name="${spec%%=*}"
+          path="${spec#*=}"
+          tmp="$RUNTIME/.$name.jpg.part"
+          if fetch "$base" "$user" "$path" "$tmp"; then
+            mv -f "$tmp" "$RUNTIME/$name.jpg"
+          else
+            rm -f "$tmp"
+          fi
+        ) &
       done
+      wait
       sleep "$interval"
     done
     ;;
