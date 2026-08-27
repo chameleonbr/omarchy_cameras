@@ -31,11 +31,11 @@ something else:
 sudo pacman -S --needed curl python jq mpv libsecret
 ```
 
-Anything missing is named at the top of **Config** rather than failing quietly.
+Anything missing is named at the top of **Settings** rather than failing quietly.
 
 ## Set up
 
-Select the bar icon, then **Config**. Switch on the sources you have — each
+Select the bar icon, then **Settings**. Switch on the sources you have — each
 one's settings appear only once it is on, so an ONVIF-only setup never has to
 read about restreams.
 
@@ -64,10 +64,11 @@ Passwords go to the system keyring, never to the config file.
 
 | Key     | Action                   |
 | ------- | ------------------------ |
+| `1`–`9`, `0` | enlarge that camera (`0` is the tenth) |
 | arrows  | move between cameras     |
 | `Enter` | enlarge the selected camera, or open it when it is already enlarged |
 | `R`     | refresh                  |
-| `C`     | show or hide Config      |
+| `S`     | show or hide Settings    |
 | `Esc`   | close                    |
 
 For a keybinding, `omarchy-shell shell toggle avila.cameras '{}'` opens the
@@ -91,12 +92,12 @@ label drawn on. Alerts fire while the detection is still happening rather than
 after it ends, so the preview arrives in seconds instead of after the subject
 has left.
 
-**Config → Motion alerts** sets which labels count, which monitor, which
+**Settings → Motion alerts** sets which labels count, which monitor, which
 corner, how long it stays and how wide it is. Changing the monitor, corner or
 width rehearses the placement, so you can see the spot without waiting for
 something to walk past a camera.
 
-**Config → MQTT** is optional and only makes alerts faster: Frigate publishes a
+**Settings → MQTT** is optional and only makes alerts faster: Frigate publishes a
 detection the instant it makes one. Measured against a live camera, 0.6-0.7s
 instead of 3.9-9.1s. Only the broker password is needed — everything else comes
 from Frigate. HTTP polling keeps running whenever the broker is not connected,
@@ -120,7 +121,7 @@ Removing the plugin never touches Frigate or the cameras themselves.
 
 ## Configuration file
 
-`~/.config/omarchy/cameras.json` holds everything the config screen writes. It
+`~/.config/omarchy/cameras.json` holds everything the settings screen writes. It
 is watched, so hand edits apply without a restart.
 
 ```json
@@ -143,7 +144,7 @@ is watched, so hand edits apply without a restart.
 `frigate.rtspPort` is only a fallback: the real port is read out of Frigate's
 own camera inputs. `alerts.monitor` is a connector name as the compositor
 reports it (`DP-1`, `HDMI-A-1`); empty means the first screen. `onvif[]` is
-written by the config screen, but hand-editing is fine —
+written by the settings screen, but hand-editing is fine —
 `{"name": …, "rtsp": …, "user": …, "ptz": true|false, "xaddr": …}`.
 
 Thumbnail columns and refresh interval live on the bar widget entry in
@@ -219,7 +220,7 @@ reads `tls_ca_certs`, `tls_client_cert`, `tls_client_key` and `tls_insecure`
 out of Frigate's own config, and treats port 8883 the same way, so there is
 nothing extra to configure. Certificates are verified. This matters because
 MQTT's connect packet carries the password as plain text: on a broker without
-TLS anyone on the path can read it, and the config screen says so.
+TLS anyone on the path can read it, and the settings screen says so.
 
 The same warning appears when a Frigate login is set on an `http://` URL. That
 one the plugin cannot fix — whether the server offers HTTPS is up to the

@@ -2,7 +2,7 @@
 //
 // Layer 1 of the two-layer design: the popup shows a grid of periodically
 // refreshed JPEGs, not live video. Picking a tile hands the stream to mpv
-// (layer 2) via the service. The Config button in the hero swaps the grid for
+// (layer 2) via the service. The Settings button in the hero swaps the grid for
 // the setup form, so a fresh install never has to be told to hand-edit JSON.
 
 import QtQuick
@@ -141,6 +141,16 @@ Panel {
     if (!service || !featuredCamera) return
     service.view(featuredCamera.id)
     root.close()
+  }
+
+  // Numbered the way a taskbar numbers things: 1 is the first camera and 0 is
+  // the tenth. Past ten there is no key left, and the arrows still reach them.
+  function featureByDigit(digit) {
+    var index = (parseInt(digit, 10) + 9) % 10
+    if (index >= cameras.length) return
+    featured = index
+    cursor = index
+    cursorActive = true
   }
 
   // A camera list that shrank must not leave the big tile pointing past its
@@ -391,8 +401,9 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (root.view === "config") return
-        if (t === "r" || t === "R") { if (root.service) root.service.refresh() }
-        else if (t === "c" || t === "C") root.toggleConfig()
+        if (t >= "0" && t <= "9") root.featureByDigit(t)
+        else if (t === "r" || t === "R") { if (root.service) root.service.refresh() }
+        else if (t === "s" || t === "S") root.toggleConfig()
       }
 
       Flickable {
@@ -432,7 +443,7 @@ Panel {
                 spacing: Style.space(8)
 
                 // Arming and disarming detection is the one setting worth
-                // reaching without opening the form, so it sits beside Config
+                // reaching without opening the form, so it sits beside Settings
                 // rather than inside it.
                 Button {
                   text: root.alertsOn ? "Detection on" : "Detection off"
@@ -449,7 +460,7 @@ Panel {
                 }
 
                 Button {
-                  text: root.view === "config" ? "Done" : "Config"
+                  text: root.view === "config" ? "Done" : "Settings"
                   bordered: true
                   foreground: root.foreground
                   fontFamily: root.fontFamily

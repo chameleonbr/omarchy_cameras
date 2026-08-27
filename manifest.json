@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "avila.cameras",
   "name": "Cameras",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "author": "Andre Avila",
   "license": "MIT",
   "description": "Frigate and ONVIF camera viewer: live thumbnails in the bar, motion alerts, fullscreen playback in mpv.",
